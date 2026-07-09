@@ -34,5 +34,9 @@ Thumbs.db
 *.swp
 *.swo
 
+# Vercel — only project.json (non-secret IDs) is committed; auth.json excluded by this rule
+dashboard/.vercel/
+!dashboard/.vercel/project.json
+
 # Logs
 *.log
