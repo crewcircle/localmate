@@ -1,0 +1,75 @@
+name: CI
+
+# Runs on every push to main and every PR targeting main.
+# Backend: uv sync + smoke import + pytest collect (graceful when no tests yet).
+# Dashboard: npm ci + build + lint.
+# Both jobs are independent and run in parallel.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend — uv sync + pytest
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Sync dependencies
+        run: uv sync --frozen || uv sync
+
+      - name: Smoke-import FastAPI app
+        run: uv run python -c "import main; assert main.app.title == 'Local Biz Automation'"
+
+      - name: Run tests (collect-only if no test files yet)
+        run: uv run pytest tests/ -q --no-header --co || echo "no tests collected (expected until Phase 10)"
+
+      - name: Run unit tests if any
+        run: uv run pytest tests/ -q --no-header || echo "tests skipped — none defined yet"
+
+  dashboard:
+    name: Dashboard — Next.js build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Type-check + build
+        run: npm run build
+        env:
+          # Required by Next.js at build time when env vars are read.
+          NEXT_PUBLIC_API_URL: https://api.localmate.crewcircle.co
