@@ -14,7 +14,8 @@ on:
     branches: [main]
     paths:
       - dashboard/**
-      - .github/workflows/deploy.yml
+      - .github/workflows/**
+  workflow_dispatch:
 
 concurrency:
   group: deploy-prod-${{ github.ref }}
