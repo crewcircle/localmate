@@ -87,7 +87,9 @@ The repo ships with two GitHub Actions workflows in `.github/workflows/`:
   - `dashboard` — installs Node 22, `npm ci`, lints (continue-on-error), `npm run build` against `NEXT_PUBLIC_API_URL=https://api.localmate.crewcircle.co`.
 - **`deploy.yml`** — runs on push to `main` only (path-restricted to `dashboard/**`). Uses Vercel CLI to `pull → build → deploy --prod --prebuilt`. Outputs the production URL in the run log.
 
-Backend deploys automatically once Coolify is wired to the GitHub repo — Coolify polls the `main` branch directly, no Actions job needed.
+- **`docker.yml`** — runs on push to `main` (path-restricted to `backend/**`). Builds the backend Docker image and pushes to `ghcr.io/crewcircle/localmate-backend:latest` with GHA cache + SBOM. Coolify can pull this prebuilt image instead of building from source.
+
+Backend deploys automatically once Coolify is wired to the GitHub repo — Coolify polls the `main` branch directly, no Actions job needed. Alternatively, Coolify can pull the prebuilt image from GHCR (`ghcr.io/crewcircle/localmate-backend:latest`) to skip the build step.
 
 ---
 
@@ -103,6 +105,10 @@ Backend deploys automatically once Coolify is wired to the GitHub repo — Cooli
    - `DOPPLER_TOKEN` — from `doppler configs tokens create --project local-biz-au --config prod`
    - (Doppler injects `SUPABASE_URL`, `STRIPE_SECRET_KEY`, etc. at runtime — no need to duplicate them)
 8. Deploy. Coolify reads `backend/Dockerfile` and builds automatically.
+
+**Alternative — pull prebuilt image from GHCR:** Instead of building from source, set Coolify to use `ghcr.io/crewcircle/localmate-backend:latest` as the Docker image. The `docker.yml` CI workflow builds and pushes this image on every push to `main`. This skips the build step on the droplet (faster deploys, less RAM needed).
+
+**Make the GHCR package public** (one-time): After the first `docker.yml` run, visit `https://github.com/orgs/crewcircle/packages/container/localmate-backend/settings` and set visibility to Public (or keep Private and add a Docker registry auth token in Coolify).
 
 **Container monitors health:** set Coolify's Health Check endpoint to `GET /health` — expect `{"status":"ok","project":"local-biz-au"}`.
 
