@@ -10,10 +10,10 @@ AEST = pytz.timezone("Australia/Sydney")
 def create_scheduler() -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=AEST)
 
-    # Yelp polling — every 24 hours (added in Phase 3)
+    # Yelp polling — daily at midnight (added in Phase 3)
     try:
         from jobs.review_poll import poll_yelp_reviews_all_clients
-        scheduler.add_job(poll_yelp_reviews_all_clients, CronTrigger(hour="*/24"), id="yelp_poll")
+        scheduler.add_job(poll_yelp_reviews_all_clients, CronTrigger(hour=0), id="yelp_poll")
     except ImportError:
         logger.warning("yelp_poll job not yet implemented — skipping")
 
