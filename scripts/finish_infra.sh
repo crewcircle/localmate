@@ -36,7 +36,7 @@ curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/
 
 echo "=== 2/2 Attaching dashboard domain to Vercel ==="
 # CLI v50 syntax: single argument, applies to the project linked in this directory
-(cd "$(dirname "$0")/../dashboard" && vercel domains add localmate.crewcircle.co || true)
+(cd "$(dirname "$0")/../dashboard" && vercel domains add localmate.crewcircle.com.au || true)
 
 echo "=== Verification ==="
 echo -n "api.localmate DNS (.com.au): " && dig +short A api.localmate.crewcircle.com.au
