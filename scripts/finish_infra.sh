@@ -39,9 +39,9 @@ echo "=== 2/2 Attaching dashboard domain to Vercel ==="
 (cd "$(dirname "$0")/../dashboard" && vercel domains add localmate.crewcircle.co || true)
 
 echo "=== Verification ==="
-echo -n "api.localmate DNS: " && dig +short A api.localmate.crewcircle.co
-echo -n "localmate DNS:     " && dig +short CNAME localmate.crewcircle.co
-echo -n "dashboard:         " && curl -s -o /dev/null -w "%{http_code}\n" --max-time 15 https://localmate.crewcircle.co || true
+echo -n "api.localmate DNS (.com.au): " && dig +short A api.localmate.crewcircle.com.au
+echo -n "localmate DNS (.com.au):     " && dig +short CNAME localmate.crewcircle.com.au
+echo -n "dashboard (.com.au):         " && curl -s -o /dev/null -w "%{http_code}\n" --max-time 15 https://localmate.crewcircle.com.au || true
 echo
 echo "Next: deploy the backend with:"
 echo "  doppler run --project localmate --config prd -- bash scripts/deploy_backend.sh"

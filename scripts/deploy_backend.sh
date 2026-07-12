@@ -153,5 +153,5 @@ REMOTE
 echo "=== Verification ==="
 sleep 5
 echo -n "https://api.localmate.crewcircle.co/health -> "
-curl -s --max-time 20 https://api.localmate.crewcircle.co/health || echo "(cert may take ~60s on first run - retry shortly)"
+curl -s --max-time 20 https://api.localmate.crewcircle.com.au/health || echo "(cert may take ~60s on first run - retry shortly)"
 echo

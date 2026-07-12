@@ -4,7 +4,7 @@
 # `localmate-backend` is the container_name of localmate's only service, and it
 # joins the existing `deploy_default` network so Caddy can route to it by name.
 
-api.localmate.crewcircle.co {
+api.localmate.crewcircle.com.au {
 	reverse_proxy localmate-backend:8000
 
 	encode gzip
