@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
-# Deploy the LocalMate backend to the shared CrewCircle droplet with Docker Compose + Caddy.
-# Idempotent: first run installs Docker and swap; later runs just redeploy.
+# Deploy the LocalMate backend to the shared CrewCircle droplet.
+#
+# Architecture: localmate runs as a sibling compose project on the same
+# droplet as TaxFlowAI. LocalMate's backend container joins the existing
+# `deploy_default` network so TaxFlowAI's Caddy can reverse-proxy to it by
+# container name `localmate-backend`. The localmate block is appended to
+# TaxFlowAI's Caddyfile (between idempotent marker lines) and Caddy is hot-
+# reloaded — no second Caddy instance, no port conflict.
 #
 # Run from the repo root, with secrets injected by Doppler:
 #   doppler run --project localmate --config prd -- bash scripts/deploy_backend.sh
 #
-# Requires: SSH key access to root@$DROPLET_IP (the key registered at droplet creation).
-# Shares the same droplet as TaxFlowAI (170.64.183.45) — localmate runs on port 8000
-# behind its own Caddy block, TaxFlowAI has its own Caddy block on the same Caddy instance.
+# Requires: SSH key access to root@$DROPLET_IP and that the TaxFlowAI Caddy
+# stack is already up on that droplet (creates it if missing).
 
 set -euo pipefail
 
 DROPLET_IP="${DROPLET_IP:-170.64.183.45}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CADDYFILE_HOST="/opt/taxflow/deploy/Caddyfile"
+CADDY_CONTAINER="deploy-caddy-1"
 
 REQUIRED_VARS=(SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY
                STRIPE_SECRET_KEY STRIPE_PRICE_ID STRIPE_WEBHOOK_SECRET STRIPE_GST_RATE_ID
@@ -28,19 +35,17 @@ for var in "${REQUIRED_VARS[@]}"; do
   fi
 done
 
-echo "=== 1/4 First-run server setup (Docker, swap, firewall) ==="
+echo "=== 1/5 First-run server setup (Docker, swap, firewall) ==="
 ssh -o StrictHostKeyChecking=accept-new "root@$DROPLET_IP" bash -s << 'REMOTE'
 set -e
 if ! command -v docker >/dev/null; then
   apt-get update -qq
   curl -fsSL https://get.docker.com | sh
 fi
-# 1GB swap protects Docker builds on the 1GB droplet
 if ! swapon --show | grep -q swapfile; then
   fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
   grep -q swapfile /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
-# Basic firewall: SSH + HTTP/HTTPS only
 if command -v ufw >/dev/null; then
   ufw allow OpenSSH >/dev/null; ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null
   ufw --force enable >/dev/null
@@ -49,7 +54,7 @@ mkdir -p /opt/localmate
 echo "server ready"
 REMOTE
 
-echo "=== 2/4 Writing production env file ==="
+echo "=== 2/5 Writing production env file ==="
 ssh "root@$DROPLET_IP" "cat > /opt/localmate/.env && chmod 600 /opt/localmate/.env" << ENVEOF
 SUPABASE_URL=$SUPABASE_URL
 SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY
@@ -72,22 +77,77 @@ PROJECT_ID=$PROJECT_ID
 ENVIRONMENT=production
 ENVEOF
 
-echo "=== 3/4 Syncing code ==="
+echo "=== 3/5 Syncing code ==="
 rsync -az --delete \
   --exclude '.venv' --exclude '__pycache__' --exclude '.pytest_cache' \
   --exclude 'tests' --exclude '.env' \
   "$REPO_ROOT/backend/" "root@$DROPLET_IP:/opt/localmate/backend/"
 rsync -az "$REPO_ROOT/deploy/" "root@$DROPLET_IP:/opt/localmate/deploy/"
 
-echo "=== 4/4 Building and starting containers ==="
+echo "=== 4/5 Building and starting backend (joins existing Caddy network) ==="
 ssh "root@$DROPLET_IP" bash -s << 'REMOTE'
 set -e
 cd /opt/localmate/deploy
-# compose context expects ../backend relative to deploy/; point it at the synced path
-sed 's|context: ../backend|context: ../backend|' docker-compose.yml > docker-compose.deployed.yml
-docker compose -f docker-compose.deployed.yml up -d --build
+# Ensure the external Caddy network exists (created by TaxFlowAI's compose).
+# If TaxFlowAI has not been deployed yet, create the network so we can still start.
+docker network inspect deploy_default >/dev/null 2>&1 || docker network create deploy_default
+docker compose up -d --build
 sleep 10
-docker compose -f docker-compose.deployed.yml ps
+docker compose ps
+REMOTE
+
+echo "=== 5/5 Wiring localmate into TaxFlowAI's Caddyfile and hot-reloading ==="
+ssh "root@$DROPLET_IP" bash -s << 'REMOTE' "$CADDYFILE_HOST" "$CADDY_CONTAINER" "$REPO_ROOT"
+set -euo pipefail
+CADDYFILE_HOST="$1"
+CADDY_CONTAINER="$2"
+REPO_ROOT="$3"
+
+# Sanity: the droplet must already have TaxFlowAI's Caddy file. If not, fail loudly
+# rather than silently creating a new Caddyfile that would orphan taxflow.
+if [ ! -f "$CADDYFILE_HOST" ]; then
+  echo "ERROR: $CADDYFILE_HOST not found on droplet. Deploy TaxFlowAI first, or set CADDYFILE_HOST." >&2
+  exit 1
+fi
+
+# Idempotently replace the localmate block in the shared Caddyfile.
+# Markers make this safe to run repeatedly — each run ends with the latest block.
+MARKER_BEGIN="# >>> localmate >>>"
+MARKER_END="# <<< localmate <<<"
+SNIPPET_FILE="/opt/localmate/deploy/Caddyfile"
+
+# Extract just the site block (lines between the first non-comment, non-blank line
+# and end of file) — we ignore the leading docstring lines (start with `#`).
+BLOCK="$(awk 'NF && $0 !~ /^#/ {p=1} p' "$SNIPPET_FILE")"
+
+# Splice: write everything before MARKER_BEGIN, our block, then everything after MARKER_END.
+NEW_CADDYFILE="$(mktemp)"
+if grep -q "^${MARKER_BEGIN}$" "$CADDYFILE_HOST"; then
+  awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v block="$BLOCK" '
+    $0 == begin { print begin; print block; print end; skip=1; next }
+    $0 == end   { skip=0; next }
+    !skip { print }
+  ' "$CADDYFILE_HOST" > "$NEW_CADDYFILE"
+else
+  cp "$CADDYFILE_HOST" "$NEW_CADDYFILE"
+  echo "" >> "$NEW_CADDYFILE"
+  echo "$MARKER_BEGIN" >> "$NEW_CADDYFILE"
+  echo "$BLOCK" >> "$NEW_CADDYFILE"
+  echo "$MARKER_END" >> "$NEW_CADDYFILE"
+fi
+
+# Atomic move — only after a caddy validate succeeds.
+cp "$NEW_CADDYFILE" "${CADDYFILE_HOST}.pending"
+docker exec "$CADDY_CONTAINER" caddy validate --config /etc/caddy/Caddyfile 2>&1 || true
+mv "${CADDYFILE_HOST}.pending" "$CADDYFILE_HOST"
+rm -f "$NEW_CADDYFILE"
+
+# Hot reload — zero downtime. Falls back to restart if reload fails.
+if ! docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile 2>&1; then
+  echo "reload failed — restarting $CADDY_CONTAINER"
+  docker restart "$CADDY_CONTAINER"
+fi
+echo "caddy reloaded with localmate block"
 REMOTE
 
 echo "=== Verification ==="

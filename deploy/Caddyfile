@@ -1,5 +1,11 @@
+# Snippet appended to /opt/taxflow/deploy/Caddyfile on the shared droplet.
+# Served by TaxFlowAI's Caddy container (deploy-caddy-1), no second Caddy needed.
+#
+# `localmate-backend` is the container_name of localmate's only service, and it
+# joins the existing `deploy_default` network so Caddy can route to it by name.
+
 api.localmate.crewcircle.co {
-	reverse_proxy backend:8000
+	reverse_proxy localmate-backend:8000
 
 	encode gzip
 

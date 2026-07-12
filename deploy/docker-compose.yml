@@ -2,12 +2,18 @@ services:
   backend:
     build:
       context: ../backend
+    container_name: localmate-backend
     restart: unless-stopped
     env_file: /opt/localmate/.env
-    # 1 worker on the shared 1GB droplet (colocated with TaxFlowAI)
+    # 1 worker on the shared 1GB droplet (colocated with TaxFlowAI backend)
     command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     expose:
       - "8000"
+    # Join the existing Caddy network so TaxFlowAI's Caddy can reverse-proxy to us
+    # by container name `localmate-backend`. We do NOT run our own Caddy — the
+    # shared droplet's Caddy serves both taxflow and localmate via one Caddyfile.
+    networks:
+      - deploy_default
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)\""]
       interval: 30s
@@ -20,24 +26,8 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - backend
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-volumes:
-  caddy_data:
-  caddy_config:
+networks:
+  # External network created by TaxFlowAI's compose project `deploy`.
+  # Caddy runs in this network with alias `caddy` and `deploy-caddy-1`.
+  deploy_default:
+    external: true
