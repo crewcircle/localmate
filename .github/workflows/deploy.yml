@@ -1,8 +1,8 @@
 name: Deploy
 
 # Auto-deploys the dashboard to Vercel production on every push to main.
-# Backend deploys via Coolify git webhook (configured in Coolify dashboard,
-# not GitHub Actions — Coolify polls the repo directly).
+# Backend deploys via `scripts/deploy_backend.sh` (Caddy + Docker Compose on
+# shared DigitalOcean droplet — run manually with Doppler secrets injection).
 #
 # Required repo secrets (Settings → Secrets and variables → Actions):
 #   VERCEL_TOKEN         — Vercel team service token (Settings → Tokens)

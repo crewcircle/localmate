@@ -22,13 +22,13 @@ if [ -z "${CLOUDFLARE_ZONE_ID:-}" ]; then
 fi
 
 echo "=== 1/2 Creating DNS records ==="
-# CNAME: localmate.crewcircle.co → Vercel (dashboard)
+# CNAME: localmate.crewcircle.com.au → Vercel (dashboard)
 curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
   -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
   --data '{"type":"CNAME","name":"localmate","content":"cname.vercel-dns.com","proxied":false}' \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print('PASS: localmate CNAME' if d['success'] else f'exists/FAIL: {d[\"errors\"]}')"
 
-# A record: api.localmate.crewcircle.co → shared droplet (backend)
+# A record: api.localmate.crewcircle.com.au → shared droplet (backend)
 curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/dns_records" \
   -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" -H "Content-Type: application/json" \
   --data "{\"type\":\"A\",\"name\":\"api.localmate\",\"content\":\"$DROPLET_IP\",\"proxied\":false,\"comment\":\"LocalMate backend droplet (shared with TaxFlowAI)\"}" \

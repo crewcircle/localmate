@@ -136,11 +136,11 @@ else
   echo "$MARKER_END" >> "$NEW_CADDYFILE"
 fi
 
-# Atomic move — only after a caddy validate succeeds.
-cp "$NEW_CADDYFILE" "${CADDYFILE_HOST}.pending"
-docker exec "$CADDY_CONTAINER" caddy validate --config /etc/caddy/Caddyfile 2>&1 || true
-mv "${CADDYFILE_HOST}.pending" "$CADDYFILE_HOST"
+# Overwrite in-place (cp, not mv) — mv creates a new inode that the
+# bind mount inside the Caddy container can't see. cp preserves the inode.
+cp "$NEW_CADDYFILE" "$CADDYFILE_HOST"
 rm -f "$NEW_CADDYFILE"
+docker exec "$CADDY_CONTAINER" caddy validate --config /etc/caddy/Caddyfile 2>&1 || true
 
 # Hot reload — zero downtime. Falls back to restart if reload fails.
 if ! docker exec "$CADDY_CONTAINER" caddy reload --config /etc/caddy/Caddyfile 2>&1; then
