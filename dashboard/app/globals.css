@@ -1,12 +1,149 @@
 @import "tailwindcss";
 
 :root {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-geist-sans);
+
+  --radius: 0.5rem;
+  --radius-sm: calc(var(--radius) - 0.4rem);
+  --radius-md: calc(var(--radius) - 0.2rem);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 0.4rem);
+  --radius-2xl: calc(var(--radius) + 0.8rem);
+  --radius-3xl: calc(var(--radius) + 1.2rem);
+  --radius-4xl: calc(var(--radius) + 1.6rem);
+
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #020617;
+  --primary: #0f172a;
+  --primary-foreground: #ffffff;
+  --secondary: #334155;
+  --secondary-foreground: #ffffff;
+  --accent: #ea580c;
+  --accent-foreground: #ffffff;
+  --muted: #fffbeb;
+  --muted-foreground: #64748b;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: #e5e7eb;
+  --input: #e2e8f0;
+  --ring: #0f172a;
+
+  --sidebar: #f8fafc;
+  --sidebar-foreground: #0f172a;
+  --sidebar-primary: #ea580c;
+  --sidebar-accent: #fff7ed;
+  --sidebar-border: #e5e7eb;
+  --sidebar-ring: #0f172a;
+
+  --chart-1: #ea580c;
+  --chart-2: #f59e0b;
+  --chart-3: #10b981;
+  --chart-4: #3b82f6;
+  --chart-5: #8b5cf6;
+}
+
+.dark {
+  --background: #0b1121;
+  --foreground: #f1f5f9;
+  --primary: #1e293b;
+  --primary-foreground: #f1f5f9;
+  --secondary: #475569;
+  --secondary-foreground: #f1f5f9;
+  --accent: #fb923c;
+  --accent-foreground: #020617;
+  --muted: #1e293b;
+  --muted-foreground: #94a3b8;
+  --destructive: #dc2626;
+  --destructive-foreground: #f1f5f9;
+  --border: #1e293b;
+  --input: #334155;
+  --ring: #38bdf8;
+
+  --sidebar: #0b1121;
+  --sidebar-foreground: #f1f5f9;
+  --sidebar-primary: #fb923c;
+  --sidebar-accent: #1e293b;
+  --sidebar-border: #1e293b;
+  --sidebar-ring: #38bdf8;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-2xl: var(--radius-2xl);
+  --radius-3xl: var(--radius-3xl);
+  --radius-4xl: var(--radius-4xl);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-geist-sans);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in { animation: fade-in 0.5s ease-out forwards; }
+.animate-pulse-soft { animation: pulse-soft 3s ease-in-out infinite; }
+.animate-slide-up { animation: slide-up 0.6s ease-out forwards; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in, .animate-pulse-soft, .animate-slide-up {
+    animation: none;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading;
+  }
 }

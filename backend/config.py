@@ -20,7 +20,9 @@ class Settings(BaseSettings):
     gbp_client_id:             str
     gbp_client_secret:         str
     base_domain:               str
-    project_id:                str = "local-biz-au"
+    yelp_api_key:              str = ""
+    sentry_dsn:                str = ""
+    project_id:                str = "localmate"
     environment:               str = "prod"
 
     class Config:

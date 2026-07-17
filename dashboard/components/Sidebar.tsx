@@ -21,16 +21,16 @@ export default function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="flex w-64 flex-col border-r bg-white">
-      <div className="flex items-center gap-2 border-b px-6 py-4">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-sm font-bold text-white">
-          CC
+    <aside className="flex w-64 flex-col border-r border-sidebar-border bg-sidebar">
+      <div className="flex items-center gap-2 border-b border-sidebar-border px-6 py-4">
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-orange-500 to-amber-600 text-xs font-bold text-white">
+          LM
         </div>
         <div>
-          <p className="text-sm font-semibold text-gray-900">
-            Local Biz Automation
+          <p className="text-sm font-semibold text-sidebar-foreground">
+            Local<span className="text-accent">Mate</span>
           </p>
-          <p className="text-xs text-gray-500">by CrewCircle</p>
+          <p className="text-xs text-muted-foreground">by CrewCircle</p>
         </div>
       </div>
       <nav className="flex-1 space-y-1 px-3 py-4">
@@ -44,8 +44,8 @@ export default function Sidebar() {
               className={clsx(
                 "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                 active
-                  ? "bg-blue-50 text-blue-700"
-                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                  ? "bg-sidebar-accent text-sidebar-primary"
+                  : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
               )}
             >
               <Icon className="h-4 w-4" />
@@ -54,8 +54,8 @@ export default function Sidebar() {
           );
         })}
       </nav>
-      <div className="border-t px-6 py-4">
-        <p className="text-xs text-gray-400">v0.1.0-demo</p>
+      <div className="border-t border-sidebar-border px-6 py-4">
+        <p className="text-xs text-muted-foreground/70">v0.1.0-demo</p>
       </div>
     </aside>
   );

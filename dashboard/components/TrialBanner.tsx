@@ -26,10 +26,10 @@ const STUB_CLIENT = {
 };
 
 const bannerStyles: Record<string, string> = {
-  active: "bg-blue-50 border-blue-200 text-blue-800",
-  expiring_soon: "bg-amber-50 border-amber-200 text-amber-800",
-  card_required: "bg-red-50 border-red-200 text-red-800",
-  expired: "bg-gray-100 border-gray-300 text-gray-600",
+  active: "bg-accent/10 border-accent/20 text-accent",
+  expiring_soon: "bg-muted border-chart-2/20 text-chart-2",
+  card_required: "bg-destructive/10 border-destructive/20 text-destructive",
+  expired: "bg-muted/50 border-border text-muted-foreground",
 };
 
 const icons: Record<string, React.ReactNode> = {
@@ -67,12 +67,12 @@ export default function TrialBanner({ client: _client }: TrialBannerProps) {
         </div>
         <div className="flex items-center gap-2">
           {(state === "expiring_soon" || state === "card_required") && (
-            <button className="rounded bg-white px-3 py-1 text-sm font-medium shadow-sm border hover:bg-gray-50">
+            <button className="rounded bg-background px-3 py-1 text-sm font-medium shadow-sm border border-border hover:bg-muted">
               {state === "card_required" ? "Add card NOW" : "Add card"}
             </button>
           )}
           {state === "expired" && (
-            <button className="rounded bg-gray-800 px-3 py-1 text-sm font-medium text-white hover:bg-gray-700">
+            <button className="rounded bg-primary px-3 py-1 text-sm font-medium text-primary-foreground hover:bg-primary/90">
               Upgrade
             </button>
           )}

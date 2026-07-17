@@ -1,1 +1,16 @@
-{"projectId":"prj_Vf6N3LZwKRtdfsSZqm18b5yIKoOR","orgId":"team_KLvjgmDvB1ELR2WItAnnywyW","projectName":"localmate"}
+{
+  "projectId": "prj_Vf6N3LZwKRtdfsSZqm18b5yIKoOR",
+  "orgId": "team_KLvjgmDvB1ELR2WItAnnywyW",
+  "projectName": "localmate",
+  "settings": {
+    "createdAt": 1783637891414,
+    "framework": "nextjs",
+    "devCommand": null,
+    "installCommand": "npm ci",
+    "buildCommand": "npm run build",
+    "outputDirectory": ".next",
+    "rootDirectory": null,
+    "directoryListing": false,
+    "nodeVersion": "24.x"
+  }
+}

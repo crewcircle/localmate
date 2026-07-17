@@ -24,26 +24,26 @@ export default function DashboardPage() {
       label: "Pending",
       value: drafts.length.toString(),
       icon: Clock,
-      color: "text-blue-600 bg-blue-50",
+      color: "text-accent bg-accent/10",
     },
     {
       label: "Posted today",
       value: "2",
       icon: CheckCircle2,
-      color: "text-green-600 bg-green-50",
+      color: "text-chart-3 bg-chart-3/10",
     },
     {
       label: "Avg SLA",
       value: "3.2h",
       icon: BarChart3,
-      color: "text-amber-600 bg-amber-50",
+      color: "text-chart-2 bg-muted",
     },
   ];
 
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
       </div>
     );
   }
@@ -51,10 +51,10 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">
+        <h1 className="text-2xl font-bold text-foreground">
           Review Approval Queue
         </h1>
-        <p className="mt-1 text-sm text-gray-500">
+        <p className="mt-1 text-sm text-muted-foreground">
           AI-drafted responses ready for your review
         </p>
       </div>
@@ -63,7 +63,7 @@ export default function DashboardPage() {
         {stats.map((stat) => {
           const Icon = stat.icon;
           return (
-            <div key={stat.label} className={`rounded-lg border p-4 ${stat.color}`}>
+            <div key={stat.label} className={`rounded-lg border border-border p-4 ${stat.color}`}>
               <div className="flex items-center gap-3">
                 <Icon className="h-5 w-5" />
                 <div>
@@ -77,12 +77,12 @@ export default function DashboardPage() {
       </div>
 
       {drafts.length === 0 ? (
-        <div className="rounded-lg border bg-white p-12 text-center">
-          <CheckCircle2 className="mx-auto h-12 w-12 text-green-400" />
-          <h3 className="mt-4 text-lg font-semibold text-gray-900">
+        <div className="rounded-lg border border-border bg-background p-12 text-center">
+          <CheckCircle2 className="mx-auto h-12 w-12 text-chart-3" />
+          <h3 className="mt-4 text-lg font-semibold text-foreground">
             All caught up!
           </h3>
-          <p className="mt-1 text-sm text-gray-500">
+          <p className="mt-1 text-sm text-muted-foreground">
             Check back later for new reviews needing approval.
           </p>
         </div>

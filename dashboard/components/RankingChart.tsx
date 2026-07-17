@@ -10,7 +10,7 @@ export default function RankingChart({ data }: RankingChartProps) {
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+          <tr className="border-b border-border text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
             <th className="pb-2 pr-4">Keyword</th>
             <th className="pb-2 pr-4">Last Week</th>
             <th className="pb-2 pr-4">This Week</th>
@@ -25,24 +25,24 @@ export default function RankingChart({ data }: RankingChartProps) {
             return (
               <tr
                 key={row.keyword}
-                className="border-b last:border-0"
+                className="border-b border-border last:border-0"
               >
-                <td className="py-2 pr-4 font-medium text-gray-900">
+                <td className="py-2 pr-4 font-medium text-foreground">
                   {row.keyword}
                 </td>
-                <td className="py-2 pr-4 text-gray-600">{row.lastWeek}</td>
-                <td className="py-2 pr-4 text-gray-600">{row.thisWeek}</td>
+                <td className="py-2 pr-4 text-muted-foreground">{row.lastWeek}</td>
+                <td className="py-2 pr-4 text-muted-foreground">{row.thisWeek}</td>
                 <td className="py-2 pr-4">
                   {delta === 0 ? (
-                    <span className="inline-flex items-center gap-1 text-gray-400">
+                    <span className="inline-flex items-center gap-1 text-muted-foreground/70">
                       <Minus className="h-3 w-3" /> No change
                     </span>
                   ) : improved ? (
-                    <span className="inline-flex items-center gap-1 text-green-600">
+                    <span className="inline-flex items-center gap-1 text-chart-3">
                       <ArrowUp className="h-3 w-3" /> Up {delta}
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 text-red-600">
+                    <span className="inline-flex items-center gap-1 text-destructive">
                       <ArrowDown className="h-3 w-3" /> Down {Math.abs(delta)}
                     </span>
                   )}

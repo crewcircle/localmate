@@ -9,8 +9,11 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
+    "@vercel/speed-insights": "^2.0.0",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",
+    "geist": "^1.7.2",
     "lucide-react": "^1.23.0",
     "next": "16.2.9",
     "react": "19.2.4",
