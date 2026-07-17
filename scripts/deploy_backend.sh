@@ -30,8 +30,8 @@ REQUIRED_VARS=(SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY
                YELP_API_KEY
                ENCRYPTION_KEY SUPABASE_JWT_SECRET
                SQUARE_ACCESS_TOKEN SQUARE_ENVIRONMENT
-               SENTRY_DSN
                BASE_DOMAIN PROJECT_ID)
+# SENTRY_DSN is optional — backend skips Sentry init when empty.
 for var in "${REQUIRED_VARS[@]}"; do
   if [ -z "${!var:-}" ]; then
     echo "Missing $var - run via: doppler run --project localmate --config prd -- bash scripts/deploy_backend.sh"
