@@ -45,4 +45,11 @@ def create_scheduler() -> AsyncIOScheduler:
     except ImportError:
         logger.warning("trial_hourly job not yet implemented — skipping")
 
+    # Trial email sequence (Day 1/7/13) — daily 9am AEST (added in Round 1E)
+    try:
+        from jobs.trial_emails import run_trial_emails
+        scheduler.add_job(run_trial_emails, CronTrigger(hour=9), id="trial_emails_daily")
+    except ImportError:
+        logger.warning("trial_emails_daily job not yet implemented — skipping")
+
     return scheduler

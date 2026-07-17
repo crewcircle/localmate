@@ -7,33 +7,31 @@ from bs4 import BeautifulSoup
 
 from db import get_db
 from services.claude import generate_competitor_brief
+from utils.retry import retry_on_failure
 
 logger = logging.getLogger(__name__)
 
 
+@retry_on_failure()
 async def snapshot_website(url: str) -> tuple[str, str]:
     """Fetch a competitor URL, strip non-content elements, and return (md5_hash, clean_text).
 
-    Returns ("", "") on any failure.
+    Returns ("", "") when the key is missing or the response is empty.
     """
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                url,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; LocalBizBot/1.0)"},
-                follow_redirects=True,
-                timeout=15,
-            )
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for tag in soup(["script", "style", "nav", "footer"]):
-                tag.decompose()
-            clean_text = " ".join(soup.get_text().split())
-            md5_hex = hashlib.md5(clean_text.encode()).hexdigest()
-            return md5_hex, clean_text
-    except Exception as e:
-        logger.error(f"snapshot_website failed for {url}: {e}")
-        return "", ""
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; LocalBizBot/1.0)"},
+            follow_redirects=True,
+            timeout=15,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer"]):
+            tag.decompose()
+        clean_text = " ".join(soup.get_text().split())
+        md5_hex = hashlib.md5(clean_text.encode()).hexdigest()
+        return md5_hex, clean_text
 
 
 async def detect_changes(client_id: str, competitor_url: str) -> dict | None:
@@ -97,6 +95,11 @@ def _parse_threat_level(brief: str) -> str:
     return "MEDIUM"
 
 
+@retry_on_failure()
+async def _generate_brief_safe(business_name: str, changes_summary: str) -> str:
+    return await generate_competitor_brief(business_name, changes_summary)
+
+
 async def run_competitor_snapshots_all_clients() -> None:
     """APScheduler job — runs Sunday 10pm AEST.
 
@@ -157,7 +160,7 @@ async def run_competitor_snapshots_all_clients() -> None:
                 )
             changes_summary = "\n\n".join(parts)
 
-            brief = await generate_competitor_brief(business_name, changes_summary)
+            brief = await _generate_brief_safe(business_name, changes_summary)
             threat_level = _parse_threat_level(brief)
 
             for c in changes:

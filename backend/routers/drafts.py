@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from db import get_db
+from middleware.auth import require_auth
 
 router = APIRouter()
 
@@ -7,7 +8,8 @@ router = APIRouter()
 @router.get("")
 async def list_drafts(
     status: str = Query(default="pending_approval"),
-    client_id: str | None = Query(default=None)
+    client_id: str | None = Query(default=None),
+    auth: dict = Depends(require_auth),
 ):
     """List drafts for dashboard approval queue."""
     db = get_db()

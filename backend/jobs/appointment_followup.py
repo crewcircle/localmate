@@ -14,7 +14,8 @@ from workalendar.au import (
 
 from db import get_db
 from services.claude import generate_followup_message
-from services.cliniko import get_appointments, get_future_appointments
+from services import cliniko as cliniko_adapter
+from services import square_appointments as square_adapter
 from services.twilio_sms import send_sms
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,19 @@ _STATE_CALENDARS = {
     "ACT": AustralianCapitalTerritory,
     "NT": NorthernTerritory,
 }
+
+_BOOKING_ADAPTERS = {
+    "cliniko": cliniko_adapter,
+    "square": square_adapter,
+}
+
+
+def get_booking_adapter(booking_system: str):  # type: ignore[no-untyped-def]
+    """Return the adapter module for *booking_system*, or None if unsupported."""
+    adapter = _BOOKING_ADAPTERS.get(booking_system)
+    if adapter is None:
+        logger.warning("Unsupported booking_system %r — skipping", booking_system)
+    return adapter
 
 
 def is_au_public_holiday(d: date, state: str = "NSW") -> bool:
@@ -50,21 +64,16 @@ async def identify_lapsed_patients(client: dict) -> list[dict]:
     cutoff_start = today - timedelta(days=65)
 
     booking_system = client.get("booking_system", "cliniko")
-
-    if booking_system == "cliniko":
-        appointments = await get_appointments(
-            client,
-            date_from=cutoff_start.isoformat(),
-            date_to=cutoff_end.isoformat(),
-            status="completed",
-        )
-    else:
-        logger.warning(
-            "Unknown booking_system %r for client %s",
-            booking_system,
-            client.get("id"),
-        )
+    adapter = get_booking_adapter(booking_system)
+    if adapter is None:
         return []
+
+    appointments = await adapter.get_appointments(
+        client,
+        date_from=cutoff_start.isoformat(),
+        date_to=cutoff_end.isoformat(),
+        status="completed",
+    )
 
     lapsed: list[dict] = []
     for appt in appointments:
@@ -72,7 +81,7 @@ async def identify_lapsed_patients(client: dict) -> list[dict]:
         if patient_id is None:
             continue
 
-        future = await get_future_appointments(
+        future = await adapter.get_future_appointments(
             client,
             patient_id=str(patient_id),
             after=today.isoformat(),
@@ -156,13 +165,26 @@ async def _process_lapsed_patient(
     patient: dict,
 ) -> None:
     """Check do-not-contact, generate message, send SMS, log to appointments table."""
-    patient_db = (
-        db.table("patients")
-        .select("do_not_contact")
-        .eq("cliniko_id", patient["patient_id"])
-        .maybe_single()
-        .execute()
-    )
+    booking_system = client.get("booking_system", "cliniko")
+    id_column = "cliniko_id" if booking_system == "cliniko" else "square_id"
+    try:
+        patient_db = (
+            db.table("patients")
+            .select("do_not_contact")
+            .eq("client_id", client.get("id"))
+            .eq(id_column, patient["patient_id"])
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logger.error(
+            "patients lookup failed for %s (client %s): %s",
+            patient["patient_id"],
+            client.get("id"),
+            e,
+        )
+        patient_db = type("FakeResult", (), {"data": None})()
+
     if patient_db.data and patient_db.data.get("do_not_contact"):
         logger.info(
             "Skipping patient %s — do_not_contact is set",

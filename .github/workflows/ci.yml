@@ -41,8 +41,8 @@ jobs:
         run: uv sync --frozen || uv sync
 
       - name: Smoke-import FastAPI app
-        run: uv run python -c "import main; assert main.app.title == 'Local Biz Automation'"
-        env:
+        run: uv run python -c "import main; assert main.app.title == 'LocalMate'"
+        env: &backend-env
           SUPABASE_URL: https://stub.supabase.co
           SUPABASE_ANON_KEY: stub-anon-key
           SUPABASE_SERVICE_ROLE_KEY: stub-service-role-key
@@ -59,61 +59,19 @@ jobs:
           DATAFORSEO_PASSWORD: stubpass
           GBP_CLIENT_ID: stub-client-id
           GBP_CLIENT_SECRET: stub-client-secret
-          BASE_DOMAIN: crewcircle.co
-          PROJECT_ID: local-biz-au
+          BASE_DOMAIN: crewcircle.com.au
+          PROJECT_ID: localmate
           ENVIRONMENT: ci
+          ENCRYPTION_KEY: ""
+          SUPABASE_JWT_SECRET: ""
+          YELP_API_KEY: stub-yelp
+          SENTRY_DSN: ""
+          SQUARE_ACCESS_TOKEN: ""
+          SQUARE_ENVIRONMENT: sandbox
 
-      - name: Run tests (collect-only if no test files yet)
-        run: uv run pytest tests/ -q --no-header --co || echo "no tests collected (expected until Phase 10)"
-        env:
-          SUPABASE_URL: https://stub.supabase.co
-          SUPABASE_ANON_KEY: stub-anon-key
-          SUPABASE_SERVICE_ROLE_KEY: stub-service-role-key
-          STRIPE_SECRET_KEY: sk_stub
-          STRIPE_PRICE_ID: price_stub
-          STRIPE_WEBHOOK_SECRET: whsec_stub
-          STRIPE_GST_RATE_ID: ""
-          ANTHROPIC_API_KEY: sk-ant-stub
-          RESEND_API_KEY: re_stub
-          TWILIO_ACCOUNT_SID: ACstub
-          TWILIO_AUTH_TOKEN: stub
-          TWILIO_AU_NUMBER: "+61400000000"
-          DATAFORSEO_LOGIN: stub@login
-          DATAFORSEO_PASSWORD: stubpass
-          GBP_CLIENT_ID: stub-client-id
-          GBP_CLIENT_SECRET: stub-client-secret
-          BASE_DOMAIN: crewcircle.co
-          PROJECT_ID: local-biz-au
-          ENVIRONMENT: ci
-
-      - name: Run unit tests if any
-        run: uv run pytest tests/ -q --no-header || echo "tests skipped — none defined yet"
-        env:
-          SUPABASE_URL: https://stub.supabase.co
-          SUPABASE_ANON_KEY: stub-anon-key
-          SUPABASE_SERVICE_ROLE_KEY: stub-service-role-key
-          STRIPE_SECRET_KEY: sk_stub
-          STRIPE_PRICE_ID: price_stub
-          STRIPE_WEBHOOK_SECRET: whsec_stub
-          STRIPE_GST_RATE_ID: ""
-          ANTHROPIC_API_KEY: sk-ant-stub
-          RESEND_API_KEY: re_stub
-          TWILIO_ACCOUNT_SID: ACstub
-          TWILIO_AUTH_TOKEN: stub
-          TWILIO_AU_NUMBER: "+61400000000"
-          DATAFORSEO_LOGIN: stub@login
-          DATAFORSEO_PASSWORD: stubpass
-          GBP_CLIENT_ID: stub-client-id
-          GBP_CLIENT_SECRET: stub-client-secret
-          BASE_DOMAIN: crewcircle.co
-          PROJECT_ID: local-biz-au
-          ENVIRONMENT: ci
-
-      - name: Run tests (collect-only if no test files yet)
-        run: uv run pytest tests/ -q --no-header --co || echo "no tests collected (expected until Phase 10)"
-
-      - name: Run unit tests if any
-        run: uv run pytest tests/ -q --no-header || echo "tests skipped — none defined yet"
+      - name: Run pytest
+        run: uv run pytest tests/ -v --tb=short
+        env: *backend-env
 
   dashboard:
     name: Dashboard — Next.js build
@@ -141,4 +99,4 @@ jobs:
         run: npm run build
         env:
           # Required by Next.js at build time when env vars are read.
-          NEXT_PUBLIC_API_URL: https://api.localmate.crewcircle.co
+          NEXT_PUBLIC_API_URL: https://api.localmate.crewcircle.com.au

@@ -1,3 +1,24 @@
+"""Google Business Profile service layer.
+
+Migrated from v4 (mybusiness.googleapis.com/v4) to v1 APIs per Google's
+deprecation notice.  Key endpoints by API:
+
+  Business Information  – mybusinessbusinessinformation.googleapis.com/v1
+  Notifications         – mybusinessnotifications.googleapis.com/v1
+  Reviews (reply)       – mybusiness.googleapis.com/v4  (still current per
+                          context7 /websites/developers_google_my-business)
+
+OAuth scopes:
+  business.manage            ← current, required
+  plus.business.manage       ← deprecated, removed
+
+Context7 docs consulted:
+  /websites/developers_google_my-business
+    • review-data / review reply endpoint (v4 confirmed current)
+    • implement-oauth / scopes
+    • notification-setup / accounts.updateNotificationSetting (v1)
+"""
+
 import logging
 import httpx
 from config import settings
@@ -6,7 +27,15 @@ logger = logging.getLogger(__name__)
 
 GOOGLE_OAUTH_BASE = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GBP_API_BASE = "https://mybusiness.googleapis.com/v4"
+
+# Business Information API v1 — locations, attributes, categories
+BASE_API = "https://mybusinessbusinessinformation.googleapis.com/v1"
+
+# Reviews API — confirmed v4 (context7: mybusiness/content/review-data)
+GBP_REVIEWS_BASE = "https://mybusiness.googleapis.com/v4"
+
+# Notifications API v1 — Pub/Sub notification settings
+GBP_NOTIFICATIONS_BASE = "https://mybusinessnotifications.googleapis.com/v1"
 
 
 def get_gbp_auth_url(client_id: str) -> str:
@@ -14,7 +43,6 @@ def get_gbp_auth_url(client_id: str) -> str:
     redirect_uri = f"https://{settings.base_domain}/auth/gbp-callback"
     scopes = [
         "https://www.googleapis.com/auth/business.manage",
-        "https://www.googleapis.com/auth/plus.business.read"
     ]
     params = {
         "client_id": settings.gbp_client_id,
@@ -23,7 +51,7 @@ def get_gbp_auth_url(client_id: str) -> str:
         "scope": " ".join(scopes),
         "access_type": "offline",
         "prompt": "consent",
-        "state": client_id
+        "state": client_id,
     }
     query = "&".join(f"{k}={v}" for k, v in params.items())
     return f"{GOOGLE_OAUTH_BASE}?{query}"
@@ -37,7 +65,7 @@ async def exchange_code_for_tokens(code: str) -> dict:
         "client_secret": settings.gbp_client_secret,
         "code": code,
         "grant_type": "authorization_code",
-        "redirect_uri": redirect_uri
+        "redirect_uri": redirect_uri,
     }
     try:
         async with httpx.AsyncClient() as client:
@@ -55,7 +83,7 @@ async def refresh_access_token(refresh_token: str) -> str:
         "client_id": settings.gbp_client_id,
         "client_secret": settings.gbp_client_secret,
         "refresh_token": refresh_token,
-        "grant_type": "refresh_token"
+        "grant_type": "refresh_token",
     }
     try:
         async with httpx.AsyncClient() as client:
@@ -71,10 +99,14 @@ async def post_review_reply(
     location_id: str,
     review_id: str,
     reply: str,
-    access_token: str
+    access_token: str,
 ) -> bool:
-    """Post a reply to a GBP review via the My Business API."""
-    url = f"{GBP_API_BASE}/{location_id}/reviews/{review_id}/reply"
+    """Post a reply to a GBP review via the My Business API.
+
+    Uses v4 reviews endpoint (context7 confirms reviews are still on v4).
+    location_id format: accounts/{accountId}/locations/{locationId}
+    """
+    url = f"{GBP_REVIEWS_BASE}/{location_id}/reviews/{review_id}/reply"
     headers = {"Authorization": f"Bearer {access_token}"}
     body = {"comment": reply}
     try:

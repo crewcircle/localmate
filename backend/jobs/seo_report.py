@@ -7,6 +7,7 @@ from config import settings
 from db import get_db
 from services.dataforseo import get_local_rankings
 from services.claude import generate_seo_report
+from utils.retry import retry_on_failure
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ def _monday_of_week(dt: datetime) -> datetime:
     )
 
 
+@retry_on_failure()
 async def send_seo_email(client: dict, report_text: str) -> None:
     """Send the SEO report email to a client via Resend."""
     from services.resend_email import _get_resend
@@ -30,17 +32,32 @@ async def send_seo_email(client: dict, report_text: str) -> None:
         logger.warning("No email for client %s — skipping SEO email", client.get("id"))
         return
 
-    try:
-        r = _get_resend()
-        r.Emails.send(
-            from_email=f"hello@{settings.base_domain}",
-            to_email=email,
-            subject=f"Weekly SEO Report — {business_name}",
-            html=f"<p>Hi {business_name} team,</p><p>Here is your weekly SEO ranking report:</p><pre style='font-family: sans-serif; white-space: pre-wrap;'>{report_text}</pre>",
-        )
-        logger.info("SEO report email sent to %s (%s)", business_name, email)
-    except Exception as e:
-        logger.error("send_seo_email failed for %s: %s", client.get("id"), e)
+    r = _get_resend()
+    r.Emails.send(
+        from_email=f"hello@{settings.base_domain}",
+        to_email=email,
+        subject=f"Weekly SEO Report — {business_name}",
+        html=f"<p>Hi {business_name} team,</p><p>Here is your weekly SEO ranking report:</p><pre style='font-family: sans-serif; white-space: pre-wrap;'>{report_text}</pre>",
+    )
+    logger.info("SEO report email sent to %s (%s)", business_name, email)
+
+
+@retry_on_failure()
+async def _fetch_rankings_from_api(
+    keyword: str, location: str, client_suburb: str
+) -> dict:
+    return await get_local_rankings(
+        keyword=keyword, location=location, client_suburb=client_suburb
+    )
+
+
+@retry_on_failure()
+async def _generate_report_safe(
+    business_name: str, this_week: list[dict], last_week: list[dict]
+) -> str:
+    return await generate_seo_report(
+        business_name=business_name, this_week=this_week, last_week=last_week
+    )
 
 
 def _fetch_rankings(db, client_id: str, week_start: datetime) -> list[dict]:
@@ -101,7 +118,7 @@ async def run_seo_rankings_all_clients() -> None:
 
         try:
             for kw in keywords:
-                result = await get_local_rankings(
+                result = await _fetch_rankings_from_api(
                     keyword=kw,
                     location=location,
                     client_suburb=client.get("suburb", ""),
@@ -145,7 +162,7 @@ async def run_seo_rankings_all_clients() -> None:
 
         # Generate and send the report
         try:
-            report_text = await generate_seo_report(
+            report_text = await _generate_report_safe(
                 business_name=client.get("business_name", ""),
                 this_week=this_week,
                 last_week=last_week,

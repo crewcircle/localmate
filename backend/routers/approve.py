@@ -1,13 +1,14 @@
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from db import get_db
+from middleware.auth import require_auth
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
 @router.post("/review/{draft_id}")
-async def approve_review(draft_id: str, edited_text: str | None = None):
+async def approve_review(draft_id: str, edited_text: str | None = None, auth: dict = Depends(require_auth)):
     """Approve a draft and post the reply to GBP. If edited_text is provided, post that instead."""
     db = get_db()
     draft_resp = db.table("drafts").select("*").eq("id", draft_id).single().execute()
@@ -46,7 +47,7 @@ async def approve_review(draft_id: str, edited_text: str | None = None):
 
 
 @router.delete("/review/{draft_id}")
-async def discard_review(draft_id: str):
+async def discard_review(draft_id: str, auth: dict = Depends(require_auth)):
     """Discard a draft — no reply is posted to GBP."""
     db = get_db()
     draft_resp = db.table("drafts").select("status").eq("id", draft_id).single().execute()

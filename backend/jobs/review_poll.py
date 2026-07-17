@@ -2,6 +2,7 @@ import logging
 import httpx
 from db import get_db
 from config import settings
+from utils.retry import retry_on_failure
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ async def poll_yelp_reviews_all_clients() -> None:
             logger.error(f"Yelp poll failed for {client['id']}: {e}")
 
 
+@retry_on_failure()
 async def _fetch_yelp_reviews(yelp_business_id: str) -> list[dict]:
     """Fetch reviews from Yelp Fusion API."""
     yelp_key = getattr(settings, "yelp_api_key", None)
@@ -36,15 +38,28 @@ async def _fetch_yelp_reviews(yelp_business_id: str) -> list[dict]:
 
     headers = {"Authorization": f"Bearer {yelp_key}"}
     url = f"{YELP_FUSION_BASE}/businesses/{yelp_business_id}/reviews"
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, headers=headers, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("reviews", [])
-    except httpx.HTTPError as e:
-        logger.error(f"Yelp API fetch failed: {e}")
-        return []
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("reviews", [])
+
+
+@retry_on_failure()
+async def _generate_review_draft(
+    review_text: str,
+    rating: int,
+    reviewer_name: str,
+    voice_sample: str,
+) -> str:
+    from services.claude import generate_review_response
+
+    return await generate_review_response(
+        review_text=review_text,
+        rating=rating,
+        reviewer_name=reviewer_name,
+        voice_sample=voice_sample,
+    )
 
 
 async def _create_yelp_draft(client: dict, review: dict) -> None:
@@ -62,17 +77,12 @@ async def _create_yelp_draft(client: dict, review: dict) -> None:
         logger.info(f"Trial gate blocked Yelp review for {client['id']}: {gate['reason']}")
         return
 
-    try:
-        from services.claude import generate_review_response
-        draft_text = await generate_review_response(
-            review_text=review.get("text", ""),
-            rating=review.get("rating", 5),
-            reviewer_name=review.get("user", {}).get("name", "Reviewer"),
-            voice_sample=client.get("voice_sample", "")
-        )
-    except Exception as e:
-        logger.error(f"Claude draft for Yelp review failed: {e}")
-        return
+    draft_text = await _generate_review_draft(
+        review_text=review.get("text", ""),
+        rating=review.get("rating", 5),
+        reviewer_name=review.get("user", {}).get("name", "Reviewer"),
+        voice_sample=client.get("voice_sample", ""),
+    )
 
     db.table("drafts").insert({
         "client_id": client["id"],

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     twilio_au_number:          str
     dataforseo_login:          str
     dataforseo_password:       str
+    encryption_key:            str = ""
     gbp_client_id:             str
     gbp_client_secret:         str
     base_domain:               str
@@ -24,6 +25,9 @@ class Settings(BaseSettings):
     sentry_dsn:                str = ""
     project_id:                str = "localmate"
     environment:               str = "prod"
+    square_access_token:       str = ""
+    square_environment:        str = "sandbox"
+    supabase_jwt_secret:       str = ""
 
     class Config:
         env_file = ".env.local"

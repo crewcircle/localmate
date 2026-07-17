@@ -5,6 +5,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 from db import get_db
 from config import settings
+from services.crypto import encrypt
+from services.gbp import exchange_code_for_tokens
 
 router = APIRouter()
 AEST = pytz.timezone("Australia/Sydney")
@@ -79,6 +81,35 @@ async def get_gbp_oauth_url(client_id: str = Query(...)):
         raise HTTPException(status_code=500, detail="OAuth URL generation failed")
 
 
+@router.get("/gbp-callback")
+async def gbp_callback(code: str = Query(...), state: str = Query(...)):
+    """Google OAuth callback — exchange code, encrypt tokens, store on client."""
+    client_id = state
+    try:
+        token_response = await exchange_code_for_tokens(code)
+        if "access_token" not in token_response:
+            raise ValueError("GBP token exchange missing access_token")
+
+        encrypted_access = encrypt(token_response["access_token"])
+        encrypted_refresh = encrypt(token_response.get("refresh_token", ""))
+        location_id = token_response.get("resourceName", "").split("/")[-1] or None
+
+        db = get_db()
+        db.table("clients").update({
+            "gbp_access_token": encrypted_access,
+            "gbp_refresh_token": encrypted_refresh,
+            "gbp_location_id": location_id,
+        }).eq("id", client_id).execute()
+
+        return {"status": "connected", "client_id": client_id}
+    except ValueError as e:
+        logger.error(f"GBP OAuth validation failed for {client_id}: {e}")
+        raise HTTPException(status_code=400, detail=f"GBP OAuth failed: {e}")
+    except Exception as e:
+        logger.error(f"GBP OAuth callback failed for {client_id}: {e}")
+        raise HTTPException(status_code=400, detail=f"GBP OAuth failed: {e}")
+
+
 @router.post("/billing/setup-complete")
 async def billing_setup_complete(payload: dict):
     """Complete billing setup — create Stripe subscription with trial end timestamp."""
@@ -122,3 +153,30 @@ async def billing_setup_complete(payload: dict):
     }).eq("id", client_id).execute()
 
     return {"subscription_id": subscription["id"], "status": "active"}
+
+
+@router.post("/billing/setup-intent")
+async def billing_setup_intent(payload: dict):
+    """Create a Stripe SetupIntent for dashboard 'Add card' flow."""
+    client_id = payload.get("client_id")
+    if not client_id:
+        raise HTTPException(status_code=422, detail="Missing client_id")
+
+    try:
+        db = get_db()
+        resp = db.table("clients").select("stripe_customer_id").eq("id", client_id).single().execute()
+        if not resp.data:
+            raise HTTPException(status_code=404, detail="Client not found")
+
+        customer_id = resp.data["stripe_customer_id"]
+        setup_intent = stripe.SetupIntent.create(
+            customer=customer_id,
+            payment_method_types=["card", "au_becs_debit"],
+            usage="off_session",
+        )
+        return {"client_secret": setup_intent.client_secret}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Stripe SetupIntent failed for {client_id}: {e}")
+        raise HTTPException(status_code=502, detail="Payment setup failed")
