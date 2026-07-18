@@ -8,12 +8,12 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "LocalMate | Local Business Automation by CrewCircle",
   description:
-    "AI-powered automation for Australian small businesses. Review responses, SEO reports, competitor tracking, patient rebooking, and menu sync.",
+    "Your Google reviews, answered overnight. Five background jobs for Aussie SMBs: Review Guard, Rank Report, Competitor Watch, Rebook, Menu Sync. 14-day free trial, no card required.",
   metadataBase: new URL("https://localmate.crewcircle.com.au"),
   openGraph: {
     title: "LocalMate | Local Business Automation by CrewCircle",
     description:
-      "AI-powered automation for Australian small businesses.",
+      "Your Google reviews, answered overnight. Five background jobs for Aussie SMBs: Review Guard, Rank Report, Competitor Watch, Rebook, Menu Sync. 14-day free trial, no card required.",
     type: "website",
     locale: "en_AU",
     siteName: "LocalMate",
@@ -22,7 +22,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "LocalMate | Local Business Automation by CrewCircle",
     description:
-      "AI-powered automation for Australian small businesses.",
+      "Your Google reviews, answered overnight. Five background jobs for Aussie SMBs.",
   },
 };
 

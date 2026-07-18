@@ -10,7 +10,7 @@ import {
 const features = [
   {
     name: "Review Guard",
-    price: "$149–$249/mo",
+    price: "$74/mo",
     icon: MessageSquare,
     description:
       "Every Google & Yelp review answered within hours, drafted in your own voice by Claude. You approve before anything goes out. Never write a manual reply again.",
@@ -22,7 +22,7 @@ const features = [
   },
   {
     name: "Rank Report",
-    price: "$99–$199/mo",
+    price: "$49/mo",
     icon: BarChart3,
     description:
       "Monday 6am AEST, you get a plain-English email showing where you rank for the keywords that matter in your suburb. No jargon — just what moved and what to do.",
@@ -34,7 +34,7 @@ const features = [
   },
   {
     name: "Competitor Watch",
-    price: "$199–$299/mo",
+    price: "$99/mo",
     icon: Eye,
     description:
       "Every Sunday night we snapshot your competitors' websites. When something changes — a new offer, a price drop, a blog post — you get a threat-rated brief by 7am Monday.",
@@ -46,7 +46,7 @@ const features = [
   },
   {
     name: "Rebook",
-    price: "$299–$499/mo",
+    price: "$149/mo",
     icon: CalendarHeart,
     description:
       "Identify patients 60 days since last visit, send a follow-up SMS in your tone, gate sends on AU public holidays. Works with Cliniko and Square.",
@@ -58,7 +58,7 @@ const features = [
   },
   {
     name: "Menu Sync",
-    price: "$149/mo",
+    price: "$74/mo",
     icon: Utensils,
     description:
       "Edit your menu in one place. We push it to Google Business Profile and Square Catalog automatically. No more out-of-date prices across platforms.",
@@ -91,21 +91,21 @@ const steps = [
 const tiers = [
   {
     name: "Starter",
-    price: "$99",
+    price: "$49",
     tagline: "For small operators testing the waters.",
     includes: ["Rank Report"],
     highlighted: false,
   },
   {
     name: "Growth",
-    price: "$249",
+    price: "$79",
     tagline: "The background operator that keeps you sorted.",
     includes: ["Review Guard", "Rank Report", "Competitor Watch"],
     highlighted: true,
   },
   {
     name: "Complete",
-    price: "$499",
+    price: "$100",
     tagline: "Everything, set-and-forget.",
     includes: [
       "Review Guard",
@@ -160,6 +160,12 @@ export default function MarketingLanding() {
           </a>
           <div className="flex items-center gap-4">
             <a
+              href="tel:+61410603242"
+              className="hidden sm:inline text-sm text-muted-foreground hover:text-accent transition-colors"
+            >
+              +61 410 603 242
+            </a>
+            <a
               href="/demo"
               className="text-sm text-muted-foreground hover:text-foreground transition-colors"
             >
@@ -181,12 +187,13 @@ export default function MarketingLanding() {
             Built for Aussie small businesses
           </span>
           <h1 className="mt-6 text-3xl sm:text-4xl md:text-[48px] font-bold tracking-tight leading-tight">
-            Automate your reviews, SEO, and customers — without lifting a finger.
+            Your Google reviews, answered overnight. Every night.
           </h1>
           <p className="max-w-2xl mx-auto text-lg text-muted-foreground mt-6">
-            LocalMate runs five background jobs that keep your local biz sorted:
-            review replies, ranking reports, competitor alerts, patient rebooking,
-            and menu sync. 14-day free trial, no card required.
+            Every night, LocalMate drafts review replies in your voice — you
+            approve in 5 minutes a week. Plus ranking reports, competitor alerts,
+            patient rebooking, and menu sync. 14-day free trial, no card
+            required.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3 mt-8">
             <a
@@ -214,15 +221,16 @@ export default function MarketingLanding() {
         <section className="bg-primary text-primary-foreground py-12">
           <div className="grid grid-cols-2 md:grid-cols-4 max-w-5xl mx-auto px-6 gap-8">
             <div>
-              <span className="text-4xl font-bold block">&lt;300ms</span>
+              <span className="text-4xl font-bold block">4hr</span>
               <span className="text-sm text-primary-foreground/70 mt-2 block">
-                Avg review reply time, drafted by Claude Haiku 4.5
+                Avg time from Google review posted to drafted reply in your
+                inbox
               </span>
             </div>
             <div>
-              <span className="text-4xl font-bold block">5 jobs</span>
+              <span className="text-4xl font-bold block">2+ hrs</span>
               <span className="text-sm text-primary-foreground/70 mt-2 block">
-                Running in the background while you serve customers
+                Saved per week on reviews, reports, and rebooking
               </span>
             </div>
             <div>
@@ -310,13 +318,69 @@ export default function MarketingLanding() {
           </div>
         </section>
 
+        <section className="bg-muted/30 py-16">
+          <div className="max-w-5xl mx-auto px-6 grid md:grid-cols-2 gap-12 items-center">
+            <div>
+              <img
+                src="/founder.jpg"
+                alt="Prabhat Ranjan, founder of LocalMate"
+                className="w-full max-w-sm rounded-2xl border border-border shadow-sm"
+              />
+            </div>
+            <div>
+              <span className="text-accent text-sm font-semibold uppercase tracking-wider">
+                Meet the founder
+              </span>
+              <h2 className="mt-2 text-3xl font-bold">
+                Built by a Sydney engineer, for Sydney businesses.
+              </h2>
+              <p className="text-muted-foreground mt-4">
+                Hi, I&apos;m Prabhat. I built LocalMate in Sydney after watching
+                local businesses lose customers to unanswered Google reviews.
+                Previously engineering lead at Canva, JPMorgan, and MSCI. I pick
+                up the phone in AEST hours.
+              </p>
+              <div className="flex flex-wrap gap-2 mt-5">
+                {["Canva", "JPMorgan", "MSCI", "BNP Paribas"].map((x) => (
+                  <span
+                    key={x}
+                    className="bg-background border border-border rounded-full px-3 py-1 text-xs text-muted-foreground"
+                  >
+                    {x}
+                  </span>
+                ))}
+              </div>
+              <div className="mt-6 space-y-2 text-sm">
+                <a
+                  href="tel:+61410603242"
+                  className="flex items-center gap-2 text-foreground hover:text-accent transition-colors"
+                >
+                  <span aria-hidden="true">📞</span> +61 410 603 242
+                </a>
+                <a
+                  href="mailto:prabhat@crewcircle.com.au"
+                  className="flex items-center gap-2 text-foreground hover:text-accent transition-colors"
+                >
+                  <span aria-hidden="true">✉️</span> prabhat@crewcircle.com.au
+                </a>
+                <a
+                  href="https://calendly.com/crewcircle/30min"
+                  className="flex items-center gap-2 text-foreground hover:text-accent transition-colors"
+                >
+                  <span aria-hidden="true">📅</span> Book a 30-min call
+                </a>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section id="pricing" className="max-w-7xl mx-auto px-6 py-16">
           <div className="text-center">
             <span className="text-accent text-sm font-semibold uppercase tracking-wider">
               Pricing
             </span>
             <h2 className="mt-2 text-3xl font-bold">
-              One subscription. Pay per job.
+              Pick the jobs you need. Add more later.
             </h2>
             <p className="max-w-2xl mx-auto text-muted-foreground mt-4">
               No setup fees. No lock-in. 14-day free trial with full access — no
