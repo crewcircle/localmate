@@ -14,6 +14,11 @@
 alter table appointments add column if not exists practitioner_id   text;
 alter table appointments add column if not exists practitioner_name text;
 
+-- Patient's usual / last-seen practitioner (plan: practitioner context lives on
+-- patients, not just per-appointment).
+alter table patients add column if not exists practitioner_id   text;
+alter table patients add column if not exists practitioner_name text;
+
 alter table appointments add column if not exists claim_type       text;    -- 'bulk_billed'|'gap'|'private_health'|'unknown'
 alter table appointments add column if not exists claim_fund       text;
 alter table appointments add column if not exists claim_gap_amount numeric(10,2);

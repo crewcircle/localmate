@@ -10,12 +10,11 @@ are not fully documented publicly; the normaliser is defensive and returns ``[]`
 on any error.
 """
 import logging
-from datetime import datetime
 
 import httpx
 
 from config import settings
-from services.appointment_shape import canonical_appointment, make_claim
+from services.appointment_shape import canonical_appointment, extract_claim_from_billing, parse_iso_date
 from services.booking_credentials import get_credential
 
 logger = logging.getLogger(__name__)
@@ -34,31 +33,6 @@ _STATUS_MAP = {
     "cancelled": "Cancelled",
     "noshow": "No Show",
 }
-
-
-def _parse_date(value: str | None) -> str:
-    """Extract YYYY-MM-DD from a Nookal date/datetime string, or return ``""``."""
-    if not value:
-        return ""
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date().isoformat()
-    except (ValueError, TypeError):
-        # Nookal sometimes returns plain "YYYY-MM-DD" dates — accept directly.
-        if isinstance(value, str) and len(value) >= 10:
-            return value[:10]
-        return ""
-
-
-def _extract_claim(item: dict) -> dict | None:
-    """Best-effort claim extraction from Nookal billing fields, else ``None``."""
-    billing = item.get("billing") or item.get("invoice") or {}
-    if not isinstance(billing, dict) or not billing:
-        return None
-    return make_claim(
-        claim_type=billing.get("claim_type") or billing.get("type"),
-        fund=billing.get("fund") or billing.get("health_fund"),
-        gap_amount=billing.get("gap_amount"),
-    )
 
 
 def _normalise(item: dict) -> dict:
@@ -84,13 +58,13 @@ def _normalise(item: dict) -> dict:
             or item.get("name")
             or ""
         ),
-        appointment_date=_parse_date(
+        appointment_date=parse_iso_date(
             item.get("date") or item.get("appointmentDate") or item.get("appointment_date") or item.get("start")
         ),
         status=item.get("status", "completed"),
         practitioner_id=prac_id,
         practitioner_name=item.get("practitionerName") or item.get("practitioner_name"),
-        claim=_extract_claim(item),
+        claim=extract_claim_from_billing(item),
     )
 
 

@@ -1,6 +1,6 @@
 """Tests for the Nookal booking adapter (mocked httpx — no live API calls)."""
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import httpx
 

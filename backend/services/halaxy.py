@@ -14,12 +14,11 @@ token-fetch failure.
 import asyncio
 import logging
 import time
-from datetime import datetime
 
 import httpx
 
 from config import settings
-from services.appointment_shape import canonical_appointment
+from services.appointment_shape import canonical_appointment, parse_iso_date
 from services.booking_credentials import get_credential
 
 logger = logging.getLogger(__name__)
@@ -87,15 +86,6 @@ async def _get_token(client: dict) -> str:
         return ""
 
 
-def _parse_date(iso_str: str | None) -> str:
-    if not iso_str:
-        return ""
-    try:
-        return datetime.fromisoformat(str(iso_str).replace("Z", "+00:00")).date().isoformat()
-    except (ValueError, TypeError):
-        return ""
-
-
 # Map FHIR Appointment.status to our internal status labels.
 _FHIR_STATUS_MAP = {
     "fulfilled": "completed",
@@ -154,7 +144,7 @@ def _normalise_fhir(entry: dict) -> dict:
         patient_id=patient_id,
         patient_name=patient_name,
         treatment_type=_service_type(appt),
-        appointment_date=_parse_date(appt.get("start")),
+        appointment_date=parse_iso_date(appt.get("start")),
         status=_map_status(appt.get("status")),
         practitioner_id=practitioner_id,
         practitioner_name=practitioner_name,

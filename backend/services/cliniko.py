@@ -7,11 +7,10 @@ lives on invoices rather than the appointments endpoint, so ``claim`` stays
 ``None`` here unless billing fields are present on the appointment payload.
 """
 import logging
-from datetime import datetime
 
 import httpx
 
-from services.appointment_shape import canonical_appointment, make_claim
+from services.appointment_shape import canonical_appointment, extract_claim_from_billing, parse_iso_date
 from services.booking_credentials import get_credential
 
 logger = logging.getLogger(__name__)
@@ -23,16 +22,6 @@ ID_COLUMN = "cliniko_id"            # patients table column for do_not_contact l
 CREDENTIAL_KEYS = ["cliniko_api_key"]
 SUPPORTS_REBOOK = True
 AUTH_MODEL = "api_key"
-
-
-def _parse_date(iso_str: str | None) -> str:
-    """Extract YYYY-MM-DD from an ISO datetime string, or return empty string."""
-    if not iso_str:
-        return ""
-    try:
-        return datetime.fromisoformat(iso_str.replace("Z", "+00:00")).date().isoformat()
-    except (ValueError, TypeError):
-        return ""
 
 
 def _practitioner(appt: dict) -> tuple[str | None, str | None]:
@@ -55,19 +44,6 @@ def _practitioner(appt: dict) -> tuple[str | None, str | None]:
     return (str(prac_id) if prac_id else None, prac_name)
 
 
-def _extract_claim(appt: dict) -> dict | None:
-    """Best-effort claim extraction. Cliniko surfaces billing on invoices, not the
-    appointments endpoint — returns ``None`` unless billing fields are present."""
-    billing = appt.get("billing") or appt.get("invoice")
-    if not isinstance(billing, dict):
-        return None
-    return make_claim(
-        claim_type=billing.get("claim_type") or billing.get("type"),
-        fund=billing.get("fund") or billing.get("health_fund"),
-        gap_amount=billing.get("gap_amount"),
-    )
-
-
 def _normalise(appt: dict) -> dict:
     """Normalise a raw Cliniko appointment into the canonical shape."""
     patient = appt.get("patient") or {}
@@ -80,11 +56,11 @@ def _normalise(appt: dict) -> dict:
         patient_phone=patient.get("phone"),
         patient_email=patient.get("email"),
         treatment_type=appt.get("appointment_type", ""),
-        appointment_date=_parse_date(appt.get("appointment_start")),
+        appointment_date=parse_iso_date(appt.get("appointment_start")),
         status=appt.get("status", "completed"),
         practitioner_id=prac_id,
         practitioner_name=prac_name,
-        claim=_extract_claim(appt),
+        claim=extract_claim_from_billing(appt),
     )
 
 

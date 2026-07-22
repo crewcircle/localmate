@@ -7,12 +7,11 @@ No Square SDK dependency. Emits the canonical normalised appointment shape (see
 """
 
 import logging
-from datetime import datetime
 
 import httpx
 
 from config import settings
-from services.appointment_shape import canonical_appointment
+from services.appointment_shape import canonical_appointment, parse_iso_date
 from services.booking_credentials import get_credential
 
 logger = logging.getLogger(__name__)
@@ -49,16 +48,6 @@ def _auth_headers(client: dict) -> dict:
     return {**_SQUARE_HEADERS, "Authorization": f"Bearer {_get_token(client)}"}
 
 
-def _parse_date(iso_str: str | None) -> str:
-    """Extract YYYY-MM-DD from an ISO datetime string, or return empty string."""
-    if not iso_str:
-        return ""
-    try:
-        return datetime.fromisoformat(iso_str.replace("Z", "+00:00")).date().isoformat()
-    except (ValueError, TypeError):
-        return ""
-
-
 def _normalise_booking(raw: dict) -> dict:
     """Normalise a Square booking object into the canonical appointment dict.
 
@@ -78,7 +67,7 @@ def _normalise_booking(raw: dict) -> dict:
         patient_phone=None,
         patient_email=None,
         treatment_type=first_segment.get("service_variation_name", ""),
-        appointment_date=_parse_date(start_at),
+        appointment_date=parse_iso_date(start_at),
         status=raw.get("status", "completed"),
         practitioner_id=team_member_id,
         practitioner_name=None,

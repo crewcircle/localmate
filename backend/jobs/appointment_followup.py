@@ -184,10 +184,8 @@ async def _enqueue_sms(arq_pool, to: str, body: str, state: str) -> tuple[str | 
                 await pool.close()
             except Exception:
                 pass
-    # enqueue_job returns None when a job with the same id is already queued —
-    # treat that as a successfully queued send.
-    if job is None:
-        return None, True, None
+    # We don't pass _job_id, so arq always generates a fresh UUID and enqueue_job
+    # returns a Job. getattr covers the defensive None case (same result either way).
     return getattr(job, "job_id", None), True, None
 
 

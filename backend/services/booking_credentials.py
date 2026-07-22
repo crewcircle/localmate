@@ -9,10 +9,6 @@ decrypted depends on an explicit key-name mapping (per the plan's D4): keys that
 are stored encrypted-at-rest are decrypted via :func:`services.crypto.decrypt`;
 plaintext keys (current Cliniko/Square) are returned raw for back-compat.
 """
-import logging
-
-logger = logging.getLogger(__name__)
-
 # Credential columns that are stored Fernet-encrypted at rest. Every other column
 # is read as plaintext (back-compat with the current plaintext Cliniko/Square keys).
 # Add a key here when its column is migrated to encrypted storage.
