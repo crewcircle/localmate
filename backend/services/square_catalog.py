@@ -5,7 +5,6 @@ search_changed drives the inbound reconciliation watermark flow.
 """
 
 import logging
-import uuid
 
 import httpx
 
@@ -50,6 +49,7 @@ async def upsert_item(
     elif menu_item_id:
         idempotency_key = f"{menu_item_id}:square"
     else:
+        import uuid
         idempotency_key = str(uuid.uuid4())
 
     obj: dict = {

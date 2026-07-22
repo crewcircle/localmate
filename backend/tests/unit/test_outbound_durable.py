@@ -322,6 +322,88 @@ async def test_dataforseo_task_not_found_is_success():
     mock_dl.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_dataforseo_maps_task_success():
+    """dataforseo_maps_task wraps get_maps_rankings_strict and returns the result."""
+    import task_queue
+
+    with patch("services.dataforseo.get_maps_rankings_strict", new_callable=AsyncMock,
+               return_value={"keyword": "dentist", "map_position": 3, "place_id": "P1", "matched": True}):
+        result = await task_queue.dataforseo_maps_task(
+            {"job_try": 1}, "dentist", "Bondi", "Bondi", "Sydney Dental", "P1"
+        )
+    assert result["map_position"] == 3
+    assert result["matched"] is True
+
+
+@pytest.mark.asyncio
+async def test_dataforseo_maps_task_exception_dead_letters_on_final():
+    """dataforseo_maps_task dead-letters on final try when the query raises."""
+    import task_queue
+
+    with patch("services.dataforseo.get_maps_rankings_strict", new_callable=AsyncMock, side_effect=TimeoutError("slow")), \
+         patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
+        with pytest.raises(TimeoutError):
+            await task_queue.dataforseo_maps_task(
+                {"job_try": task_queue.MAX_TRIES}, "dentist", "Bondi"
+            )
+        mock_dl.assert_awaited_once()
+        assert mock_dl.call_args[0][0] == "dataforseo"
+
+
+@pytest.mark.asyncio
+async def test_provision_gbp_notifications_task_success():
+    """provision_gbp_notifications_task returns the result when provisioning succeeds."""
+    import task_queue
+
+    with patch("services.gbp_provisioning.provision_gbp_notifications", new_callable=AsyncMock,
+               return_value={"status": "active", "account_id": "A1"}):
+        result = await task_queue.provision_gbp_notifications_task({"job_try": 1}, "c1")
+    assert result["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_provision_gbp_notifications_task_failed_raises_retry():
+    """provision_gbp_notifications_task raises Retry when provisioning fails (non-final)."""
+    import task_queue
+
+    with patch("services.gbp_provisioning.provision_gbp_notifications", new_callable=AsyncMock,
+               return_value={"status": "failed", "error": "boom"}), \
+         patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
+        with pytest.raises(Retry):
+            await task_queue.provision_gbp_notifications_task({"job_try": 1}, "c1")
+        mock_dl.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_provision_gbp_notifications_task_failed_dead_letters_on_final():
+    """provision_gbp_notifications_task dead-letters on final try when provisioning fails."""
+    import task_queue
+
+    with patch("services.gbp_provisioning.provision_gbp_notifications", new_callable=AsyncMock,
+               return_value={"status": "failed", "error": "boom"}), \
+         patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
+        with pytest.raises(RuntimeError):
+            await task_queue.provision_gbp_notifications_task(
+                {"job_try": task_queue.MAX_TRIES}, "c1"
+            )
+        mock_dl.assert_awaited_once()
+        assert mock_dl.call_args[0][0] == "gbp_provisioning"
+
+
+@pytest.mark.asyncio
+async def test_provision_gbp_notifications_task_exception_raises_retry():
+    """provision_gbp_notifications_task raises Retry on exception (non-final)."""
+    import task_queue
+
+    with patch("services.gbp_provisioning.provision_gbp_notifications", new_callable=AsyncMock,
+               side_effect=ConnectionError("net")), \
+         patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
+        with pytest.raises(Retry):
+            await task_queue.provision_gbp_notifications_task({"job_try": 1}, "c1")
+        mock_dl.assert_not_awaited()
+
+
 def test_credential_task_signatures_take_ids_only():
     """Regression guard (item 4): tasks that touch credentials must accept only
     stable IDs so no secret is ever serialized into Redis/AOF or arq's arg log."""

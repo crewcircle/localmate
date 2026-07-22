@@ -30,6 +30,9 @@ _STUB_ENV = {
     "SQUARE_APP_SECRET": "sq0cst_stub",
     "SQUARE_WEBHOOK_SIGNATURE_KEY": "sq_wh_sig_stub",
     "MENU_IMAGES_BUCKET": "menu-images",
+    "GCP_PROJECT_ID": "",
+    "GCP_SA_JSON": "",
+    "GBP_PUBSUB_TOPIC_NAME": "gbp-reviews",
 }
 for _k, _v in _STUB_ENV.items():
     os.environ.setdefault(_k, _v)

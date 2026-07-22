@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     dashboard_url:             str = ""       # Stripe portal return_url base
     stripe_portal_config_id:   str = ""       # Stripe portal configuration id (bpc_...)
 
+    # --- Phase 4: GBP Pub/Sub provisioning (D15-B full automation) ---
+    gcp_project_id:            str = ""       # GCP project hosting the Pub/Sub topic
+    gcp_sa_json:               str = ""       # service-account JSON key (topic-admin) for Pub/Sub REST
+    gbp_pubsub_topic_name:     str = "gbp-reviews"  # shared topic short name
+
     class Config:
         env_file = ".env.local"
         env_file_encoding = "utf-8"
