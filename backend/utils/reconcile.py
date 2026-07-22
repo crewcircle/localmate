@@ -6,7 +6,10 @@ This is the durability backstop for two edge cases:
   * Redis was briefly unavailable when the request handler tried to enqueue — the
     row was persisted ``pending`` but no job exists; we re-enqueue it.
   * A worker claimed a row (``processing``) and then died before finishing — the
-    lease is stale, so we reset it to ``pending`` and re-enqueue.
+    lease (``processing_started_at``) is stale, so we reset it to ``pending`` and
+    re-enqueue. Staleness of a ``processing`` row is judged by the lease start,
+    NOT ``created_at``, so a row that sat queued a long time before processing
+    began is never reclaimed while it is actively running.
 
 Registered as a SINGLE arq cron every 5 minutes in
 ``task_queue.WorkerSettings.cron_jobs`` (it is intentionally NOT also scheduled in
@@ -47,16 +50,21 @@ def _job_id(event_id: str) -> str:
 
 
 def _recover_stale_processing(db, cutoff: str) -> int:
-    """Reset rows stuck in ``processing`` past the cutoff back to ``pending``.
+    """Reset rows whose ``processing`` lease is older than the cutoff to ``pending``.
 
-    These are leases held by a worker that crashed mid-job. Resetting them lets
-    the pending sweep below re-enqueue them. Returns the number reset.
+    Staleness is judged by ``processing_started_at`` (the lease start recorded on
+    the atomic pending→processing claim), NOT ``created_at``. Basing it on
+    ``created_at`` would let an event that sat queued > STALE_MINUTES and then
+    began processing be reset to ``pending`` while it is actively running,
+    causing duplicate processing. These stale leases are held by a worker that
+    crashed mid-job; resetting them (and clearing the lease) lets the pending
+    sweep below re-enqueue them. Returns the number reset.
     """
     resp = (
         db.table("webhook_events")
-        .update({"status": "pending"})
+        .update({"status": "pending", "processing_started_at": None})
         .eq("status", "processing")
-        .lt("created_at", cutoff)
+        .lt("processing_started_at", cutoff)
         .execute()
     )
     recovered = len(resp.data) if resp and resp.data else 0

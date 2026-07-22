@@ -61,10 +61,28 @@ async def test_reconcile_recovers_stale_processing_rows():
 
     assert result["recovered"] == 1
     assert result["reenqueued"] == 1
-    # the recovery update reset processing → pending
+    # the recovery update reset processing → pending AND cleared the lease
     upd_arg = db.table.return_value.update.call_args[0][0]
     assert upd_arg["status"] == "pending"
+    assert upd_arg["processing_started_at"] is None
     db.table.return_value.update.return_value.eq.assert_called_with("status", "processing")
+
+
+@pytest.mark.asyncio
+async def test_reconcile_recovery_uses_processing_started_at_not_created_at():
+    """Stale recovery must judge a 'processing' row by its lease start
+    (processing_started_at), NOT created_at — otherwise a row that sat queued a
+    long time then started processing could be reclaimed while actively running."""
+    from utils import reconcile
+
+    db = _mock_db([], recovered_rows=[])
+    with patch("utils.reconcile.get_db", return_value=db):
+        await reconcile.reconcile_pending_webhooks(MagicMock())
+
+    # the recovery update filters processing rows by the lease column
+    db.table.return_value.update.return_value.eq.return_value.lt.assert_called_once()
+    lt_args = db.table.return_value.update.return_value.eq.return_value.lt.call_args[0]
+    assert lt_args[0] == "processing_started_at"
 
 
 @pytest.mark.asyncio

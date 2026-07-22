@@ -145,6 +145,57 @@ async def test_post_gbp_reply_task_soft_fail_raises_retry():
 
 
 @pytest.mark.asyncio
+async def test_post_gbp_reply_task_client_load_failure_retries_then_dead_letters():
+    """A DB outage / missing client during load happens INSIDE the coroutine, so
+    it must be retried (non-final) and dead-lettered (final), not raised bare."""
+    import task_queue
+
+    # DB raises when loading the client (simulated outage).
+    def _boom_db():
+        db = MagicMock()
+        db.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.side_effect = ConnectionError("db down")
+        return db
+
+    # Non-final attempt → arq.Retry, no dead-letter.
+    with patch("task_queue.get_db", side_effect=_boom_db), \
+         patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
+        with pytest.raises(Retry):
+            await task_queue.post_gbp_reply_task({"job_try": 1}, "c1", "loc", "rev", "reply")
+        mock_dl.assert_not_awaited()
+
+    # Final attempt → dead-letter + permanent failure.
+    with patch("task_queue.get_db", side_effect=_boom_db), \
+         patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
+        with pytest.raises(ConnectionError):
+            await task_queue.post_gbp_reply_task({"job_try": task_queue.MAX_TRIES}, "c1", "loc", "rev", "reply")
+        mock_dl.assert_awaited_once()
+        assert mock_dl.call_args[0][0] == "gbp_out"
+
+
+@pytest.mark.asyncio
+async def test_post_gbp_reply_task_decrypt_failure_retries_then_dead_letters():
+    """A token-decrypt failure occurs inside the coroutine and must retry/dead-letter."""
+    import task_queue
+
+    db = _client_db({"id": "c1", "gbp_access_token": "ENC", "gbp_refresh_token": "ENCR"})
+
+    with patch("task_queue.get_db", return_value=db), \
+         patch("services.crypto.decrypt", side_effect=ValueError("bad token")), \
+         patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
+        with pytest.raises(Retry):
+            await task_queue.post_gbp_reply_task({"job_try": 1}, "c1", "loc", "rev", "reply")
+        mock_dl.assert_not_awaited()
+
+    with patch("task_queue.get_db", return_value=db), \
+         patch("services.crypto.decrypt", side_effect=ValueError("bad token")), \
+         patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
+        with pytest.raises(ValueError):
+            await task_queue.post_gbp_reply_task({"job_try": task_queue.MAX_TRIES}, "c1", "loc", "rev", "reply")
+        mock_dl.assert_awaited_once()
+        assert mock_dl.call_args[0][0] == "gbp_out"
+
+
+@pytest.mark.asyncio
 async def test_square_sync_task_loads_client_in_worker():
     """The task takes client_id only and loads the client (with secrets) itself."""
     import task_queue
@@ -171,6 +222,31 @@ async def test_square_sync_task_soft_fail_dead_letters_on_final():
          patch("jobs.menu_sync._sync_square", new_callable=AsyncMock, return_value={"synced": False, "message": "bad"}), \
          patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
         with pytest.raises(RuntimeError):
+            await task_queue.square_sync_task({"job_try": task_queue.MAX_TRIES}, "c1", {"name": "Latte"})
+        mock_dl.assert_awaited_once()
+        assert mock_dl.call_args[0][0] == "square"
+
+
+@pytest.mark.asyncio
+async def test_square_sync_task_client_load_failure_retries_then_dead_letters():
+    """Client load (with the Square credential) happens INSIDE the coroutine, so a
+    DB outage retries (non-final) and dead-letters (final) instead of raising bare."""
+    import task_queue
+
+    def _boom_db():
+        db = MagicMock()
+        db.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.side_effect = ConnectionError("db down")
+        return db
+
+    with patch("task_queue.get_db", side_effect=_boom_db), \
+         patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
+        with pytest.raises(Retry):
+            await task_queue.square_sync_task({"job_try": 1}, "c1", {"name": "Latte"})
+        mock_dl.assert_not_awaited()
+
+    with patch("task_queue.get_db", side_effect=_boom_db), \
+         patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
+        with pytest.raises(ConnectionError):
             await task_queue.square_sync_task({"job_try": task_queue.MAX_TRIES}, "c1", {"name": "Latte"})
         mock_dl.assert_awaited_once()
         assert mock_dl.call_args[0][0] == "square"

@@ -14,6 +14,7 @@ create table webhook_events (
   attempts         int  not null default 0,
   last_error       text,
   created_at       timestamptz default now(),
+  processing_started_at timestamptz,                  -- lease: set on pending→processing claim; basis for stale recovery
   processed_at     timestamptz,
   unique (provider, idempotency_key)                 -- dedupe
 );

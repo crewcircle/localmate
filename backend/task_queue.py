@@ -151,6 +151,10 @@ def _mark_event(db, event_id: str, status: str, *, error: str | None = None) -> 
         update["last_error"] = error[:2000]
     if status in ("done", "failed"):
         update["processed_at"] = datetime.now(timezone.utc).isoformat()
+    if status == "pending":
+        # Releasing the lease (retry reset) — clear the lease start so the next
+        # claim records a fresh one and reconcile's stale check is accurate.
+        update["processing_started_at"] = None
     db.table("webhook_events").update(update).eq("id", event_id).execute()
 
 
@@ -179,12 +183,20 @@ async def _process_inbound(ctx: dict, event_id: str, kind: str, dispatch) -> dic
         return {"status": "already_done", "event_id": event_id}
 
     # Atomically claim the row: flip pending → processing only if still pending.
+    # ``processing_started_at`` records the lease start so reconcile bases stale
+    # recovery on when processing began (NOT ``created_at``) — a row that sat
+    # queued a long time then started processing must not be reclaimed while it
+    # is actively running.
     # Reconcile handles rows stuck in `processing` (crashed worker) by resetting
     # them to `pending`, so here we only accept `pending`.
     attempts = int(event.get("attempts", 0)) + 1
     claim = (
         db.table("webhook_events")
-        .update({"status": "processing", "attempts": attempts})
+        .update({
+            "status": "processing",
+            "attempts": attempts,
+            "processing_started_at": datetime.now(timezone.utc).isoformat(),
+        })
         .eq("id", event_id)
         .eq("status", "pending")
         .execute()
@@ -347,16 +359,22 @@ async def post_gbp_reply_task(
     """
     from services.gbp import post_review_reply
 
-    db = get_db()
-    client = _load_client(db, client_id)
-    if not client:
-        raise RuntimeError(f"post_gbp_reply_task: client {client_id} not found")
-    access_token = await _resolve_gbp_access_token(client)
+    async def _coro() -> Any:
+        # Load client, resolve+decrypt the token, and post — ALL inside the
+        # coroutine so every failure path (DB outage, missing client, decrypt
+        # error, token-refresh failure, transport error) is caught by
+        # ``_run_outbound`` and gets the retry + dead-letter treatment (C4).
+        db = get_db()
+        client = _load_client(db, client_id)
+        if not client:
+            raise RuntimeError(f"post_gbp_reply_task: client {client_id} not found")
+        access_token = await _resolve_gbp_access_token(client)
+        return await post_review_reply(location_id, review_id, reply, access_token)
 
     return await _run_outbound(
         ctx, "gbp_out", review_id,
         {"client_id": client_id, "location_id": location_id, "review_id": review_id, "reply": reply},
-        lambda: post_review_reply(location_id, review_id, reply, access_token),
+        _coro,
     )
 
 
@@ -369,14 +387,19 @@ async def square_sync_task(ctx: dict, client_id: str, item: dict) -> Any:
     """
     from jobs.menu_sync import _sync_square
 
-    db = get_db()
-    client = _load_client(db, client_id)
-    if not client:
-        raise RuntimeError(f"square_sync_task: client {client_id} not found")
+    async def _coro() -> Any:
+        # Load client (which carries the Square credential) INSIDE the coroutine
+        # so a DB outage / missing client is retried + dead-lettered like any
+        # other outbound failure (C4), not raised bare before _run_outbound.
+        db = get_db()
+        client = _load_client(db, client_id)
+        if not client:
+            raise RuntimeError(f"square_sync_task: client {client_id} not found")
+        return await _sync_square(client, item)
 
     return await _run_outbound(
         ctx, "square", client_id, {"client_id": client_id, "item": item},
-        lambda: _sync_square(client, item),
+        _coro,
     )
 
 
