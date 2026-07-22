@@ -1,4 +1,9 @@
+import base64
+import hashlib
+import json
 import logging
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Request, HTTPException
 import stripe
 from db import get_db
@@ -9,9 +14,70 @@ logger = logging.getLogger(__name__)
 stripe.api_key = settings.stripe_secret_key
 
 
+# ---------------------------------------------------------------------------
+# Durable persistence helpers
+# ---------------------------------------------------------------------------
+
+def _persist_event(provider: str, idempotency_key: str, event_type: str | None, payload: dict) -> dict:
+    """Insert a webhook_events row (status='pending'). Returns
+    ``{"status": "persisted", "event_id": id}`` or ``{"status": "duplicate"}``
+    when the (provider, idempotency_key) already exists.
+    """
+    db = get_db()
+    existing = (
+        db.table("webhook_events")
+        .select("id, status")
+        .eq("provider", provider)
+        .eq("idempotency_key", idempotency_key)
+        .maybe_single()
+        .execute()
+    )
+    if existing and existing.data:
+        return {"status": "duplicate", "event_id": existing.data["id"]}
+
+    try:
+        resp = (
+            db.table("webhook_events")
+            .insert(
+                {
+                    "provider": provider,
+                    "idempotency_key": idempotency_key,
+                    "event_type": event_type,
+                    "payload": payload,
+                    "status": "pending",
+                }
+            )
+            .execute()
+        )
+    except Exception as e:
+        # Unique-constraint race → treat as duplicate rather than 500.
+        logger.info("webhook_events insert conflict for %s/%s: %s", provider, idempotency_key, e)
+        return {"status": "duplicate"}
+
+    event_id = resp.data[0]["id"] if resp.data else None
+    return {"status": "persisted", "event_id": event_id}
+
+
+async def _enqueue(request: Request, task: str, event_id: str) -> None:
+    """Enqueue a processing task on the app's arq pool. On failure the row stays
+    'pending' and the reconciler re-enqueues it (Redis-briefly-down edge case)."""
+    arq = getattr(request.app.state, "arq", None)
+    if arq is None:
+        logger.warning("arq pool unavailable — leaving event %s pending for reconcile", event_id)
+        return
+    try:
+        await arq.enqueue_job(task, event_id)
+    except Exception as e:
+        logger.error("enqueue %s(%s) failed — left pending for reconcile: %s", task, event_id, e)
+
+
+# ---------------------------------------------------------------------------
+# Stripe
+# ---------------------------------------------------------------------------
+
 @router.post("/stripe")
 async def stripe_webhook(request: Request):
-    """Handle Stripe webhook events."""
+    """Persist + enqueue Stripe webhook events. Returns 200 fast."""
     body = await request.body()
     sig = request.headers.get("stripe-signature", "")
     try:
@@ -21,21 +87,12 @@ async def stripe_webhook(request: Request):
     except stripe.error.SignatureVerificationError:
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    event_type = event["type"]
-    data = event["data"]["object"]
+    payload = dict(event)
+    result = _persist_event("stripe", event["id"], event.get("type"), payload)
+    if result["status"] == "duplicate":
+        return {"status": "duplicate"}
 
-    if event_type == "customer.subscription.trial_will_end":
-        await handle_trial_will_end(data)
-    elif event_type == "customer.subscription.updated":
-        if data.get("status") == "active":
-            await activate_client_by_subscription(data["id"])
-    elif event_type == "customer.subscription.deleted":
-        await expire_client_by_subscription(data["id"])
-    elif event_type == "invoice.payment_failed":
-        await pause_client_jobs_by_subscription(data.get("subscription"))
-    else:
-        logger.info(f"Unhandled Stripe event: {event_type}")
-
+    await _enqueue(request, "process_stripe_event", result["event_id"])
     return {"status": "received"}
 
 
@@ -76,20 +133,113 @@ async def pause_client_jobs_by_subscription(subscription_id: str | None):
     db.table("clients").update({"subscription_status": "past_due"}).eq("stripe_subscription_id", subscription_id).execute()
 
 
+# ---------------------------------------------------------------------------
+# Google Business Profile inbound review (Pub/Sub push)
+# ---------------------------------------------------------------------------
+
+def decode_pubsub_envelope(envelope: dict) -> dict:
+    """Decode a Cloud Pub/Sub push envelope.
+
+    Standard shape::
+
+        {"message": {"data": "<base64>", "messageId": "...", ...}, "subscription": "..."}
+
+    Returns ``{"message_id": str, "notification": dict}`` where ``notification``
+    is the decoded GBP notification (e.g. ``{"notificationType": "NEW_REVIEW",
+    "location": "...", "review": "..."}``). Raises ValueError on a malformed
+    envelope.
+    """
+    message = envelope.get("message")
+    if not isinstance(message, dict):
+        raise ValueError("missing Pub/Sub message")
+    message_id = message.get("messageId") or message.get("message_id")
+    if not message_id:
+        raise ValueError("missing Pub/Sub messageId")
+    data_b64 = message.get("data")
+    notification: dict = {}
+    if data_b64:
+        try:
+            decoded = base64.b64decode(data_b64).decode("utf-8")
+            notification = json.loads(decoded) if decoded else {}
+        except Exception as e:
+            raise ValueError(f"invalid Pub/Sub message.data: {e}")
+    return {"message_id": message_id, "notification": notification}
+
+
+async def fetch_review_resource(review_name: str) -> dict:
+    """Fetch a GBP review resource by its full resource name.
+
+    ``review_name`` is ``accounts/{a}/locations/{l}/reviews/{r}``. Resolves the
+    owning client's access token and GETs the review via the GBP reviews API.
+    Returns the review resource dict (empty dict when unavailable).
+    """
+    import httpx
+    from services.gbp import GBP_REVIEWS_BASE, refresh_access_token
+
+    client = resolve_client_from_location(review_name)
+    if not client:
+        logger.warning("fetch_review_resource: no client for %s", review_name)
+        return {}
+
+    access_token = client.get("gbp_access_token", "")
+    refresh_token = client.get("gbp_refresh_token", "")
+    if not access_token and refresh_token:
+        try:
+            access_token = await refresh_access_token(refresh_token)
+        except Exception as e:
+            logger.error("fetch_review_resource: token refresh failed: %s", e)
+            return {}
+
+    url = f"{GBP_REVIEWS_BASE}/{review_name}"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        async with httpx.AsyncClient() as http:
+            resp = await http.get(url, headers=headers, timeout=15)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPError as e:
+        logger.error("fetch_review_resource GET failed for %s: %s", review_name, e)
+        return {}
+
+
 @router.post("/inbound-review")
 async def inbound_review(request: Request):
-    """Google Business Profile webhook — new review posted."""
-    payload = await request.json()
+    """GBP review notification (Pub/Sub push). Decode envelope, dedupe by
+    messageId, fetch the review resource, persist + enqueue. Returns 200 fast."""
+    envelope = await request.json()
     try:
-        await process_review(payload)
-    except Exception as e:
-        logger.error(f"process_review failed: {e}")
-        raise HTTPException(status_code=500, detail="Review processing failed")
-    return {"status": "processing"}
+        decoded = decode_pubsub_envelope(envelope)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid Pub/Sub envelope: {e}")
+
+    message_id = decoded["message_id"]
+    notification = decoded["notification"]
+
+    # The notification identifies the review resource (accounts/.../reviews/{id}).
+    review_name = (
+        notification.get("review")
+        or notification.get("name")
+        or notification.get("reviewName", "")
+    )
+
+    review = await fetch_review_resource(review_name) if review_name else {}
+    # Build the payload the process_review task consumes. Prefer the fetched
+    # resource; fall back to the notification fields.
+    payload = dict(review) if review else {}
+    payload.setdefault("name", review.get("name") or review_name)
+    if notification.get("notificationType"):
+        payload["notificationType"] = notification["notificationType"]
+
+    result = _persist_event("gbp", message_id, notification.get("notificationType"), payload)
+    if result["status"] == "duplicate":
+        return {"status": "duplicate"}
+
+    await _enqueue(request, "process_gbp_review", result["event_id"])
+    return {"status": "received"}
 
 
 async def process_review(payload: dict):
-    """Create Claude draft for a new review. GBP webhook calls this."""
+    """Create Claude draft for a new review. Called by the process_gbp_review task."""
     name = payload.get("name", "")
     review_text = payload.get("comment", "")
     rating = payload.get("starRating", 5)
@@ -152,12 +302,16 @@ def resolve_client_from_location(gbp_name: str) -> dict | None:
     return resp.data if resp.data else None
 
 
+# ---------------------------------------------------------------------------
+# Menu update (Google Sheets webhook)
+# ---------------------------------------------------------------------------
+
 @router.post("/menu-update/{client_id}")
-async def menu_update(client_id: str, payload: dict):
-    """Webhook for Google Sheets menu changes. Payload is changed row.
+async def menu_update(client_id: str, payload: dict, request: Request):
+    """Persist + enqueue a Google Sheets menu change. Returns 200 fast.
+
     item = {name, price_cents=int(float(price)*100), description, category, active}.
-    Syncs to all platforms in client.menu_sync_targets via asyncio.gather."""
-    from jobs.menu_sync import sync_menu_item
+    """
     item = {
         "name": payload.get("name"),
         "price_cents": int(float(payload.get("price", 0)) * 100),
@@ -165,5 +319,16 @@ async def menu_update(client_id: str, payload: dict):
         "category": payload.get("category", ""),
         "active": payload.get("active", True),
     }
-    result = await sync_menu_item(client_id, item)
-    return result
+    # Synthetic idempotency key: client + item name + minute bucket.
+    bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
+    raw = f"{client_id}:{item['name']}:{bucket}"
+    idempotency_key = hashlib.sha256(raw.encode()).hexdigest()
+
+    result = _persist_event(
+        "menu", idempotency_key, "menu-update", {"client_id": client_id, "item": item}
+    )
+    if result["status"] == "duplicate":
+        return {"status": "duplicate"}
+
+    await _enqueue(request, "process_menu_update", result["event_id"])
+    return {"status": "received"}

@@ -5,10 +5,16 @@ services:
     container_name: localmate-backend
     restart: unless-stopped
     env_file: /opt/localmate/.env
+    # WORKER_ROLE=web — FastAPI only; does NOT start APScheduler (avoids
+    # duplicate cron fire). Creates an arq pool to enqueue jobs.
+    environment:
+      WORKER_ROLE: web
     # 1 worker on the shared 1GB droplet (colocated with TaxFlowAI backend)
     command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
     expose:
       - "8000"
+    depends_on:
+      - localmate-redis
     # Join the existing Caddy network so TaxFlowAI's Caddy can reverse-proxy to us
     # by container name `localmate-backend`. We do NOT run our own Caddy — the
     # shared droplet's Caddy serves both taxflow and localmate via one Caddyfile.
@@ -25,6 +31,78 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # Redis — arq broker/result store. Persistent (AOF) + non-evicting so job
+  # state is never silently dropped (D9-A). Memory-capped because the droplet is
+  # 1GB shared with TaxFlowAI. `noeviction` means Redis errors rather than
+  # dropping job keys under memory pressure; `webhook_events` + the reconciler
+  # remain the durable backstop.
+  localmate-redis:
+    image: redis:7-alpine
+    container_name: localmate-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - localmate-redis-data:/data
+    networks:
+      - deploy_default
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # arq worker — executes queued tasks (inbound processing + durable outbound).
+  # Same image as backend, different command + WORKER_ROLE. Scale later if needed.
+  localmate-worker:
+    build:
+      context: ../backend
+    container_name: localmate-worker
+    restart: unless-stopped
+    env_file: /opt/localmate/.env
+    environment:
+      WORKER_ROLE: worker
+    command: ["uv", "run", "arq", "worker.WorkerSettings"]
+    depends_on:
+      - localmate-redis
+    networks:
+      - deploy_default
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Dedicated SINGLE-ACTIVE scheduler (C4 — NOT HA/leader-election). Enqueue-only
+  # APScheduler: each cron trigger pushes an arq job. Must remain a single
+  # instance so each cron fires exactly once (no duplicate fire).
+  localmate-scheduler:
+    build:
+      context: ../backend
+    container_name: localmate-scheduler
+    restart: unless-stopped
+    env_file: /opt/localmate/.env
+    environment:
+      WORKER_ROLE: scheduler
+    command: ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+    depends_on:
+      - localmate-redis
+    networks:
+      - deploy_default
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  localmate-redis-data:
 
 networks:
   # External network created by TaxFlowAI's compose project `deploy`.
