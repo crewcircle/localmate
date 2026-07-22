@@ -36,6 +36,7 @@ The backend image runs in three roles, all from `deploy/docker-compose.yml`:
 - `WORKER_ROLE` — set per-container in `docker-compose.yml` (`web`/`worker`/`scheduler`); no need to set in Doppler.
 - `STRIPE_PORTAL_CONFIG_ID` — optional `bpc_...`; empty uses the Stripe dashboard default portal config. Used by the Phase 1 billing portal endpoint. Create the portal configuration in Stripe (enable subscription update to the localmate price, payment-method update, cancellation) — one-time dashboard/API step.
 - `DASHBOARD_URL` — `https://localmate.crewcircle.co`; used as the Stripe portal `return_url` base.
+- `SUPABASE_JWT_SECRET` — **Phase 1 (required for billing).** The Supabase project's JWT secret (Settings → API → JWT Settings in the Supabase dashboard). Used to verify dashboard bearer tokens and derive `client_id` from the authenticated user (tenant-auth binding, C8/D20). When unset, the legacy `require_auth` falls back to anonymous for old callers, but the strict `/billing/*` endpoints reject with 401 — so it must be set in prd.
 
 ### Migrations (Phase 0)
 
@@ -63,6 +64,21 @@ It asserts, and FAILS the build otherwise:
 6. **Redis durability (D9-A)** — the gate refuses to pass unless Redis is `noeviction` + AOF, so job state is never silently dropped.
 
 Record the gate's `ALL PHASE 0 STAGING GATE CHECKS PASSED` output on the PR before merge.
+
+### Phase 1 — billing visibility + tenant auth
+
+**Migration:** apply `supabase/migrations/013_user_client_map.sql` on top of `012`. It creates `user_client_map (user_id text primary key, client_id uuid references clients(id))` with RLS + a `service_role_all` policy (matches `001_clients.sql`). One row per Supabase auth user → owned client; populate it at signup (or backfill existing users to their `clients` row by email). Until a user has a row, `/billing/*` returns 403.
+
+**Tenant-auth binding (C8/D20):** `GET /billing/usage` and `POST /billing/portal` derive `client_id` from the authenticated identity via `user_client_map` (never from the request body/query), so a user can only reach their own tenant. `SUPABASE_JWT_SECRET` must be set in Doppler — with it empty these endpoints reject 401 (the legacy `require_auth` still falls back to anonymous for old non-client-scoped callers).
+
+**One-time Stripe Billing Portal configuration:**
+1. Stripe Dashboard → Settings → Billing → Customer portal → Add configuration (or via API: `stripe.billing_portal.Configuration.create(...)`).
+2. Enable: subscription update (to the localmate price), payment-method update, subscription cancellation.
+3. Copy the configuration id (`bpc_...`).
+4. Set `STRIPE_PORTAL_CONFIG_ID` in Doppler (`localmate/prd`). Leave empty to use the Stripe dashboard default portal config.
+5. `DASHBOARD_URL` controls where the user lands after leaving the portal (the `return_url`).
+
+Portal-driven subscription changes (plan/card/cancel) flow back through the existing Stripe webhook handlers (`customer.subscription.updated` / `deleted`) which already update `clients.subscription_status` — no new reconciliation path.
 
 
 ---
