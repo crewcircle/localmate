@@ -19,6 +19,7 @@ The wrapper tasks are DEFINED here in Phase 0; each call site is migrated to
 enqueue in its owning phase (see the master plan ownership map).
 """
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from arq import cron, create_pool
@@ -85,9 +86,7 @@ def _load_event(db, event_id: str) -> dict | None:
     return resp.data if resp and resp.data else None
 
 
-def _mark_event(db, event_id: str, status: str, *, error: str | None = None, bump: bool = False) -> None:
-    from datetime import datetime, timezone
-
+def _mark_event(db, event_id: str, status: str, *, error: str | None = None) -> None:
     update: dict[str, Any] = {"status": status}
     if error is not None:
         update["last_error"] = error[:2000]

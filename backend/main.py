@@ -26,27 +26,25 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = None
     app.state.arq = None
 
-    role = settings.worker_role
-    if role == "scheduler":
+    from task_queue import get_arq_pool
+
+    log = logging.getLogger(__name__)
+    if settings.worker_role == "scheduler":
         # Dedicated single-active scheduler container: enqueue-only APScheduler
         # + an arq pool to push jobs. NOT HA — must be a single instance (C4).
-        from task_queue import get_arq_pool
-
         app.state.arq = await get_arq_pool()
         scheduler = create_scheduler()
         scheduler.start()
         app.state.scheduler = scheduler
-        logging.getLogger(__name__).info("Started enqueue-only scheduler (role=scheduler)")
+        log.info("Started enqueue-only scheduler (role=scheduler)")
     else:
         # web role: create an arq pool for enqueuing from request handlers.
         # Do NOT start APScheduler here (prevents duplicate cron fire across
         # web replicas). The 'worker' role runs via the arq CLI, not uvicorn.
-        from task_queue import get_arq_pool
-
         try:
             app.state.arq = await get_arq_pool()
         except Exception as e:
-            logging.getLogger(__name__).warning("arq pool init failed (web role): %s", e)
+            log.warning("arq pool init failed (web role): %s", e)
 
     yield
 

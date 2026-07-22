@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import pytest
 
 
-def _event_db(event_data, insert_id="x"):
+def _event_db(event_data):
     db = MagicMock()
     db.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
         data=event_data

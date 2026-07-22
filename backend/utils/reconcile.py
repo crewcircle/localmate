@@ -5,8 +5,8 @@ This is the durability backstop for the edge case where Redis was briefly
 unavailable when the request handler tried to enqueue: the row was still
 persisted as ``pending``, and this job picks it up.
 
-Registered every 5 minutes (arq cron in ``queue.WorkerSettings.cron_jobs`` and,
-in the scheduler role, an APScheduler enqueue of ``reconcile_webhooks``).
+Registered every 5 minutes (arq cron in ``task_queue.WorkerSettings.cron_jobs``
+and, in the scheduler role, an APScheduler enqueue of ``reconcile_webhooks``).
 """
 import logging
 from datetime import datetime, timedelta, timezone

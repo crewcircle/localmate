@@ -1,6 +1,5 @@
 """Tests for durable inbound webhook persistence + enqueue (Phase 0)."""
 import hashlib
-import json
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
@@ -115,8 +114,6 @@ async def test_enqueue_failure_leaves_row_pending():
 
 
 def test_menu_idempotency_key_is_stable_within_minute():
-    from routers import webhooks
     # Two identical items in same minute bucket hash to the same key structure.
-    import routers.webhooks as w
     raw = "client-1:Flat White:202607220800"
     assert hashlib.sha256(raw.encode()).hexdigest()  # deterministic
