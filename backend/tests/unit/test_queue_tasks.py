@@ -74,7 +74,7 @@ async def test_process_menu_update_calls_sync_menu_item():
         result = await task_queue.process_menu_update({"job_try": 1}, "evt-m")
 
     assert result["status"] == "done"
-    mock_sync.assert_awaited_once_with("c1", {"name": "Latte"})
+    mock_sync.assert_awaited_once_with("c1", None, {"name": "Latte"}, "sheets")
 
 
 @pytest.mark.asyncio
