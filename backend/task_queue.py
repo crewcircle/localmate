@@ -457,7 +457,7 @@ async def run_trial_hourly(ctx: dict) -> None:
 async def run_trial_emails_daily(ctx: dict) -> None:
     from jobs.trial_emails import run_trial_emails
 
-    await run_trial_emails()
+    await run_trial_emails(ctx.get("redis"))
 
 
 async def reconcile_webhooks(ctx: dict) -> dict:
