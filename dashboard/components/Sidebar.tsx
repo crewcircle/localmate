@@ -6,6 +6,10 @@ import {
   LayoutDashboard,
   BarChart3,
   Users,
+  Map,
+  RefreshCw,
+  Gauge,
+  CreditCard,
   Settings,
 } from "lucide-react";
 import clsx from "clsx";
@@ -14,6 +18,10 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/dashboard/reports", label: "Reports", icon: BarChart3 },
   { href: "/dashboard/clients", label: "Clients", icon: Users },
+  { href: "/dashboard/locations", label: "Locations", icon: Map },
+  { href: "/dashboard/rebook", label: "Rebook", icon: RefreshCw },
+  { href: "/dashboard/usage", label: "Usage", icon: Gauge },
+  { href: "/dashboard/billing", label: "Billing", icon: CreditCard },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 
