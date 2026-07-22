@@ -170,3 +170,319 @@ export const stubUserClient: UserClient = {
   subscription_status: "trial",
   trial_usage: { review_drafts: 3, rankings: 45, competitors: 2 },
 };
+
+// --- Phase 5: Billing & Usage ---
+
+/** Per-job usage with used amount and plan cap. */
+export interface UsageBar {
+  label: string;
+  used: number;
+  cap: number;
+}
+
+/** Stored payment card, if one is on file. */
+export interface PlanCard {
+  brand: string;
+  last4: string;
+  expires: string;
+  valid: boolean;
+}
+
+/** Active plan details returned by GET /billing/usage. */
+export interface PlanInfo {
+  name: string;
+  status: "active" | "trial" | "trial_expired";
+  price: string;
+  renews_at: string;
+  days_left: number;
+  card: PlanCard | null;
+  billing_email: string;
+  next_invoice: { amount: string; date: string };
+}
+
+/** A single line in the invoice history table. */
+export interface Invoice {
+  id: string;
+  date: string;
+  amount: string;
+  status: "paid" | "open" | "void";
+}
+
+/** Aggregate billing/usage payload returned by GET /billing/usage. */
+export interface BillingUsage {
+  plan: PlanInfo;
+  usage: UsageBar[];
+  invoices: Invoice[];
+}
+
+/** Stripe billing-portal session returned by POST /billing/portal. */
+export interface BillingPortal {
+  url: string;
+}
+
+export const stubPlanInfo: PlanInfo = {
+  name: "Growth",
+  status: "active",
+  price: "A$149 / month",
+  renews_at: "1 Aug 2026",
+  days_left: 11,
+  card: { brand: "Visa", last4: "4242", expires: "08 / 2027", valid: true },
+  billing_email: "accounts@bondidental.com.au",
+  next_invoice: { amount: "A$149.00", date: "1 Aug 2026" },
+};
+
+export const stubUsageBars: UsageBar[] = [
+  { label: "Review drafts", used: 212, cap: 500 },
+  { label: "SEO reports", used: 6, cap: 8 },
+  { label: "Competitor briefs", used: 4, cap: 5 },
+  { label: "Follow-up messages", used: 188, cap: 250 },
+];
+
+export const stubInvoices: Invoice[] = [
+  { id: "inv_2026_07", date: "1 Jul 2026", amount: "A$149.00", status: "paid" },
+  { id: "inv_2026_06", date: "1 Jun 2026", amount: "A$149.00", status: "paid" },
+  { id: "inv_2026_05", date: "1 May 2026", amount: "A$149.00", status: "paid" },
+];
+
+export const stubBillingUsage: BillingUsage = {
+  plan: stubPlanInfo,
+  usage: stubUsageBars,
+  invoices: stubInvoices,
+};
+
+/* ------------------------------------------------------------------ */
+/* Phase 5 — Locations, Rebook, Dual-rank reports, Competitor diffs    */
+/* ------------------------------------------------------------------ */
+
+export interface MenuSyncTarget {
+  key: string;
+  label: string;
+  subtitle: string;
+  enabled: boolean;
+}
+
+export interface Location {
+  id: string;
+  name: string;
+  area: string;
+  menuSyncTarget: string;
+  status: "synced" | "setup_needed";
+  lastSync: string;
+  targets: MenuSyncTarget[];
+}
+
+export interface LapsedPatient {
+  name: string;
+  lastVisit: string;
+  channel: string;
+  status: "rebooked" | "sent" | "queued" | "opted_out";
+}
+
+export interface Practitioner {
+  id: string;
+  name: string;
+  specialty: string;
+  lapsed: number;
+  sent: number;
+  rebooked: number;
+  autoFollowUp: boolean;
+  patients: LapsedPatient[];
+}
+
+export interface DualRanking {
+  keyword: string;
+  organicThisWeek: number;
+  organicDelta: number;
+  localPackThisWeek: number;
+  localPackDelta: number;
+}
+
+export interface StructuredDiff {
+  type: "price" | "menu" | "hours";
+  description: string;
+  oldValue: string;
+  newValue: string;
+  timestamp: string;
+}
+
+export interface CompetitorChange {
+  name: string;
+  domain: string;
+  threat: "low" | "medium" | "high";
+  changes: StructuredDiff[];
+}
+
+export const stubLocations: Location[] = [
+  {
+    id: "loc1",
+    name: "Bondi Dental — Bondi Junction",
+    area: "Bondi Junction, NSW",
+    menuSyncTarget: "Google Business Profile + HealthEngine",
+    status: "synced",
+    lastSync: "5m ago",
+    targets: [
+      { key: "gbp", label: "Google Business Profile", subtitle: "Services & hours", enabled: true },
+      { key: "healthengine", label: "HealthEngine", subtitle: "12 services mapped", enabled: true },
+      { key: "doctify", label: "Doctify", subtitle: "Not connected", enabled: false },
+      { key: "website", label: "Website", subtitle: "Auto-embed", enabled: true },
+    ],
+  },
+  {
+    id: "loc2",
+    name: "Bondi Dental — Surry Hills",
+    area: "Surry Hills, NSW",
+    menuSyncTarget: "Google Business Profile + HealthEngine",
+    status: "synced",
+    lastSync: "5m ago",
+    targets: [
+      { key: "gbp", label: "Google Business Profile", subtitle: "Services & hours", enabled: true },
+      { key: "healthengine", label: "HealthEngine", subtitle: "10 services mapped", enabled: true },
+      { key: "doctify", label: "Doctify", subtitle: "Not connected", enabled: false },
+      { key: "website", label: "Website", subtitle: "Auto-embed", enabled: true },
+    ],
+  },
+  {
+    id: "loc3",
+    name: "Bondi Dental — Chatswood",
+    area: "Chatswood, NSW",
+    menuSyncTarget: "Google Business Profile",
+    status: "synced",
+    lastSync: "12m ago",
+    targets: [
+      { key: "gbp", label: "Google Business Profile", subtitle: "Services & hours", enabled: true },
+      { key: "healthengine", label: "HealthEngine", subtitle: "Not connected", enabled: false },
+      { key: "doctify", label: "Doctify", subtitle: "Not connected", enabled: false },
+      { key: "website", label: "Website", subtitle: "Auto-embed", enabled: true },
+    ],
+  },
+  {
+    id: "loc4",
+    name: "Bondi Dental — Parramatta",
+    area: "Parramatta, NSW",
+    menuSyncTarget: "Google Business Profile + Doctify",
+    status: "synced",
+    lastSync: "1h ago",
+    targets: [
+      { key: "gbp", label: "Google Business Profile", subtitle: "Services & hours", enabled: true },
+      { key: "healthengine", label: "HealthEngine", subtitle: "Not connected", enabled: false },
+      { key: "doctify", label: "Doctify", subtitle: "8 services mapped", enabled: true },
+      { key: "website", label: "Website", subtitle: "Auto-embed", enabled: true },
+    ],
+  },
+  {
+    id: "loc5",
+    name: "Bondi Dental — Newtown",
+    area: "Newtown, NSW",
+    menuSyncTarget: "Google Business Profile",
+    status: "synced",
+    lastSync: "3h ago",
+    targets: [
+      { key: "gbp", label: "Google Business Profile", subtitle: "Services & hours", enabled: true },
+      { key: "healthengine", label: "HealthEngine", subtitle: "Not connected", enabled: false },
+      { key: "doctify", label: "Doctify", subtitle: "Not connected", enabled: false },
+      { key: "website", label: "Website", subtitle: "Auto-embed", enabled: true },
+    ],
+  },
+  {
+    id: "loc6",
+    name: "Bondi Dental — Manly",
+    area: "Manly, NSW",
+    menuSyncTarget: "Not configured",
+    status: "setup_needed",
+    lastSync: "—",
+    targets: [
+      { key: "gbp", label: "Google Business Profile", subtitle: "Not connected", enabled: false },
+      { key: "healthengine", label: "HealthEngine", subtitle: "Not connected", enabled: false },
+      { key: "doctify", label: "Doctify", subtitle: "Not connected", enabled: false },
+      { key: "website", label: "Website", subtitle: "Auto-embed", enabled: false },
+    ],
+  },
+];
+
+export const stubPractitioners: Practitioner[] = [
+  {
+    id: "p1",
+    name: "Dr Sarah Chen",
+    specialty: "General dentistry",
+    lapsed: 24,
+    sent: 15,
+    rebooked: 6,
+    autoFollowUp: true,
+    patients: [
+      { name: "J. Adams", lastVisit: "Nov 2025", channel: "SMS", status: "rebooked" },
+      { name: "T. Nguyen", lastVisit: "Oct 2025", channel: "Email", status: "sent" },
+      { name: "Y. Patel", lastVisit: "Sep 2025", channel: "SMS", status: "queued" },
+      { name: "R. Williams", lastVisit: "Dec 2025", channel: "—", status: "opted_out" },
+    ],
+  },
+  {
+    id: "p2",
+    name: "Dr James Wilson",
+    specialty: "Orthodontics",
+    lapsed: 31,
+    sent: 22,
+    rebooked: 9,
+    autoFollowUp: true,
+    patients: [
+      { name: "L. Garcia", lastVisit: "Oct 2025", channel: "SMS", status: "rebooked" },
+      { name: "M. Thompson", lastVisit: "Aug 2025", channel: "Email", status: "sent" },
+      { name: "K. O'Brien", lastVisit: "Jul 2025", channel: "SMS", status: "queued" },
+    ],
+  },
+  {
+    id: "p3",
+    name: "Dr Emily Tran",
+    specialty: "Hygiene",
+    lapsed: 18,
+    sent: 10,
+    rebooked: 3,
+    autoFollowUp: false,
+    patients: [
+      { name: "D. Kim", lastVisit: "Nov 2025", channel: "SMS", status: "rebooked" },
+      { name: "S. Murphy", lastVisit: "Sep 2025", channel: "Email", status: "sent" },
+    ],
+  },
+  {
+    id: "p4",
+    name: "Dr Michael Brown",
+    specialty: "Implants",
+    lapsed: 13,
+    sent: 5,
+    rebooked: 1,
+    autoFollowUp: true,
+    patients: [
+      { name: "A. Rossi", lastVisit: "Oct 2025", channel: "Email", status: "rebooked" },
+      { name: "C. Davies", lastVisit: "Aug 2025", channel: "SMS", status: "sent" },
+    ],
+  },
+];
+
+export const stubDualRankings: DualRanking[] = [
+  { keyword: "dentist Bondi", organicThisWeek: 2, organicDelta: 1, localPackThisWeek: 1, localPackDelta: 1 },
+  { keyword: "teeth whitening Sydney", organicThisWeek: 11, organicDelta: -3, localPackThisWeek: 6, localPackDelta: -1 },
+  { keyword: "emergency dentist", organicThisWeek: 5, organicDelta: 0, localPackThisWeek: 2, localPackDelta: 1 },
+  { keyword: "dental implant", organicThisWeek: 7, organicDelta: 5, localPackThisWeek: 4, localPackDelta: 5 },
+  { keyword: "invisalign", organicThisWeek: 6, organicDelta: 3, localPackThisWeek: 7, localPackDelta: 0 },
+];
+
+export const stubCompetitorChanges: CompetitorChange[] = [
+  {
+    name: "Bondi Beach Dental",
+    domain: "bondibeachdental.com.au",
+    threat: "high",
+    changes: [
+      { type: "price", description: "Teeth whitening price changed", oldValue: "A$450", newValue: "A$390", timestamp: "2h ago" },
+      { type: "menu", description: "Added service: Same-day emergency", oldValue: "Not offered", newValue: "Now offered", timestamp: "2h ago" },
+      { type: "price", description: "Consultation fee changed", oldValue: "A$95", newValue: "A$120", timestamp: "1d ago" },
+    ],
+  },
+  {
+    name: "Sydney Smiles Dental",
+    domain: "sydneysmiles.com.au",
+    threat: "medium",
+    changes: [
+      { type: "menu", description: "Menu item added: Invisalign Lite", oldValue: "—", newValue: "A$2,900", timestamp: "6h ago" },
+      { type: "hours", description: "Opening hours updated", oldValue: "Sat closed", newValue: "Sat 9–13", timestamp: "3d ago" },
+    ],
+  },
+];
