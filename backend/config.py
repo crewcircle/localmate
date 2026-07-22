@@ -25,8 +25,15 @@ class Settings(BaseSettings):
     sentry_dsn:                str = ""
     project_id:                str = "localmate"
     environment:               str = "prod"
+    # Square — global token deprecated for production (per-client OAuth is
+    # authoritative via square_oauth.get_valid_token). Kept for sandbox/dev fallback.
     square_access_token:       str = ""
     square_environment:        str = "sandbox"
+    square_app_id:             str = ""
+    square_app_secret:         str = ""
+    square_oauth_redirect_path: str = "/auth/square-callback"
+    square_webhook_signature_key: str = ""
+    menu_images_bucket:        str = "menu-images"
     supabase_jwt_secret:       str = ""
 
     # --- Phase 0: queue / worker / billing-portal infra ---
@@ -34,6 +41,11 @@ class Settings(BaseSettings):
     worker_role:               str = "web"   # "web" | "worker" | "scheduler"
     dashboard_url:             str = ""       # Stripe portal return_url base
     stripe_portal_config_id:   str = ""       # Stripe portal configuration id (bpc_...)
+
+    # --- Phase 4: GBP Pub/Sub provisioning (D15-B full automation) ---
+    gcp_project_id:            str = ""       # GCP project hosting the Pub/Sub topic
+    gcp_sa_json:               str = ""       # service-account JSON key (topic-admin) for Pub/Sub REST
+    gbp_pubsub_topic_name:     str = "gbp-reviews"  # shared topic short name
 
     class Config:
         env_file = ".env.local"

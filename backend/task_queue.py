@@ -266,8 +266,10 @@ async def process_menu_update(ctx: dict, event_id: str) -> dict:
     async def dispatch(event: dict) -> None:
         payload = event.get("payload", {})
         client_id = payload.get("client_id")
+        location_id = payload.get("location_id")
         item = payload.get("item", {})
-        result = await sync_menu_item(client_id, item)
+        origin = payload.get("origin", "sheets")
+        result = await sync_menu_item(client_id, location_id, item, origin)
         # sync_menu_item swallows per-target errors and returns a status dict.
         # A hard failure (client missing) or any un-synced target must propagate
         # so the inbound task retries / dead-letters rather than marking done.
@@ -378,27 +380,41 @@ async def post_gbp_reply_task(
     )
 
 
-async def square_sync_task(ctx: dict, client_id: str, item: dict) -> Any:
-    """Durable Square catalog upsert (migrated in Phase 3: jobs/menu_sync.py).
+async def square_sync_task(ctx: dict, client_id: str, location_id: str, item: dict) -> Any:
+    """Durable Square catalog upsert (Phase 3: per-client OAuth token).
 
-    Security (C4/D4): enqueues only ``client_id`` + the item — never the client
-    record (which carries square_access_token / PMS credentials). The client row
-    is loaded inside the worker.
+    Security (C4/D4): enqueues only ``client_id`` + ``location_id`` + the item —
+    never the client record (which carries square_access_token / PMS credentials).
+    The client row and Square token are resolved inside the worker via
+    ``square_oauth.get_valid_token`` (per-client OAuth, not global settings).
     """
-    from jobs.menu_sync import _sync_square
+    from services.square_oauth import get_valid_token
+    from services.square_catalog import upsert_item as square_upsert
 
     async def _coro() -> Any:
-        # Load client (which carries the Square credential) INSIDE the coroutine
-        # so a DB outage / missing client is retried + dead-lettered like any
-        # other outbound failure (C4), not raised bare before _run_outbound.
         db = get_db()
         client = _load_client(db, client_id)
         if not client:
             raise RuntimeError(f"square_sync_task: client {client_id} not found")
-        return await _sync_square(client, item)
+        loc_resp = (
+            db.table("locations")
+            .select("*")
+            .eq("id", location_id)
+            .maybe_single()
+            .execute()
+        )
+        if not loc_resp.data:
+            raise RuntimeError(f"square_sync_task: location {location_id} not found")
+        access_token = await get_valid_token(client)
+        result = await square_upsert(
+            access_token, loc_resp.data["square_location_id"], item
+        )
+        return {"synced": True, "external_id": result.get("id"),
+                "external_version": result.get("version")}
 
     return await _run_outbound(
-        ctx, "square", client_id, {"client_id": client_id, "item": item},
+        ctx, "square", client_id,
+        {"client_id": client_id, "location_id": location_id, "item": item},
         _coro,
     )
 
@@ -418,6 +434,63 @@ async def dataforseo_task(ctx: dict, keyword: str, location: str, client_suburb:
         {"keyword": keyword, "location": location, "client_suburb": client_suburb},
         lambda: get_local_rankings_strict(keyword, location, client_suburb),
     )
+
+
+async def dataforseo_maps_task(
+    ctx: dict, keyword: str, location: str, client_suburb: str = "",
+    business_name: str = "", place_id: str = "",
+) -> Any:
+    """Durable DataForSEO Maps/Local-Pack query (Phase 4: jobs/seo_report.py).
+
+    Uses the *strict* variant so transport/API failures are retried and
+    dead-lettered. A genuine "not matched in the local pack" returns
+    ``map_position: None`` normally.
+    """
+    from services.dataforseo import get_maps_rankings_strict
+
+    return await _run_outbound(
+        ctx, "dataforseo", keyword,
+        {"keyword": keyword, "location": location, "client_suburb": client_suburb,
+         "business_name": business_name, "place_id": place_id},
+        lambda: get_maps_rankings_strict(
+            keyword, location, client_suburb, business_name, place_id
+        ),
+    )
+
+
+async def provision_gbp_notifications_task(ctx: dict, client_id: str) -> Any:
+    """Durable GBP notification provisioning task (Phase 4, C4).
+
+    Enqueued from ``routers/auth.py::gbp_callback`` after tokens are stored.
+    ``provision_gbp_notifications`` returns a status dict (does not raise), so
+    this wrapper inspects the status: ``failed`` triggers retry/dead-letter,
+    ``active`` (or any other) is returned as success.
+
+    Only ``client_id`` is enqueued — the GCP SA key and GBP access token are
+    loaded/decrypted inside the worker, never serialized into Redis.
+    """
+    from services.gbp_provisioning import provision_gbp_notifications
+
+    job_try = int(ctx.get("job_try", 1))
+
+    try:
+        result = await provision_gbp_notifications(client_id)
+    except Exception as e:
+        if _should_dead_letter(ctx):
+            await record_dead_letter("gbp_provisioning", client_id, {"client_id": client_id}, str(e), job_try)
+            raise
+        logger.warning("GBP provisioning try %d failed: %s — retrying", job_try, e)
+        raise Retry(defer=_retry_defer(job_try))
+
+    if isinstance(result, dict) and result.get("status") == "failed":
+        error = result.get("error", "provisioning failed")
+        if _should_dead_letter(ctx):
+            await record_dead_letter("gbp_provisioning", client_id, {"client_id": client_id}, error, job_try)
+            raise RuntimeError(f"GBP provisioning failed: {error}")
+        logger.warning("GBP provisioning try %d failed: %s — retrying", job_try, error)
+        raise Retry(defer=_retry_defer(job_try))
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -493,6 +566,8 @@ FUNCTIONS = [
     post_gbp_reply_task,
     square_sync_task,
     dataforseo_task,
+    dataforseo_maps_task,
+    provision_gbp_notifications_task,
     # cron entrypoints
     run_yelp_poll,
     run_seo_weekly,

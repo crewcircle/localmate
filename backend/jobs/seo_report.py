@@ -5,7 +5,7 @@ import pytz
 
 from config import settings
 from db import get_db
-from services.dataforseo import get_local_rankings
+from services.dataforseo import get_local_rankings, get_maps_rankings
 from services.claude import generate_seo_report
 from utils.retry import retry_on_failure
 
@@ -52,6 +52,19 @@ async def _fetch_rankings_from_api(
 
 
 @retry_on_failure()
+async def _fetch_maps_rankings_from_api(
+    keyword: str, location: str, client_suburb: str, business_name: str, place_id: str
+) -> dict:
+    return await get_maps_rankings(
+        keyword=keyword,
+        location=location,
+        client_suburb=client_suburb,
+        business_name=business_name,
+        place_id=place_id,
+    )
+
+
+@retry_on_failure()
 async def _generate_report_safe(
     business_name: str, this_week: list[dict], last_week: list[dict]
 ) -> str:
@@ -64,7 +77,7 @@ def _fetch_rankings(db, client_id: str, week_start: datetime) -> list[dict]:
     """Fetch stored rankings for a client for a given week."""
     resp = (
         db.table("rankings")
-        .select("keyword, position, url")
+        .select("keyword, position, map_position, url")
         .eq("client_id", client_id)
         .eq("week_start", week_start.isoformat())
         .execute()
@@ -72,13 +85,32 @@ def _fetch_rankings(db, client_id: str, week_start: datetime) -> list[dict]:
     return resp.data if resp.data else []
 
 
+def _resolve_place_id(db, client_id: str) -> str:
+    """Best-effort: fetch place_id from the client's default location for Maps matching."""
+    try:
+        resp = (
+            db.table("locations")
+            .select("place_id")
+            .eq("client_id", client_id)
+            .eq("is_default", True)
+            .maybe_single()
+            .execute()
+        )
+        if resp and resp.data:
+            return resp.data.get("place_id") or ""
+    except Exception as e:
+        logger.debug("Could not resolve place_id for %s: %s", client_id, e)
+    return ""
+
+
 async def run_seo_rankings_all_clients() -> None:
     """APScheduler job — Monday 6am AEST.
 
     For every client with ``'seo_report'`` in ``active_jobs``:
-      1. Fetch live rankings for each tracked keyword.
-      2. Upsert results into the ``rankings`` table.
-      3. Build this-week and last-week snapshots.
+      1. Fetch live organic + Maps rankings for each tracked keyword.
+      2. Upsert results into the ``rankings`` table (both ``position`` and
+         ``map_position``).
+      3. Build this-week and last-week snapshots (with map data).
       4. Generate a plain-English report via Claude.
       5. Email the report to the client.
 
@@ -115,19 +147,33 @@ async def run_seo_rankings_all_clients() -> None:
             continue
 
         location = f"{client.get('suburb', '')} {client.get('state', '')}".strip()
+        business_name = client.get("business_name", "")
+        place_id = _resolve_place_id(db, client_id)
 
         try:
             for kw in keywords:
+                # Organic (search) rank.
                 result = await _fetch_rankings_from_api(
                     keyword=kw,
                     location=location,
                     client_suburb=client.get("suburb", ""),
                 )
+
+                # Maps (Local Pack) rank.
+                map_result = await _fetch_maps_rankings_from_api(
+                    keyword=kw,
+                    location=location,
+                    client_suburb=client.get("suburb", ""),
+                    business_name=business_name,
+                    place_id=place_id,
+                )
+
                 upsert_payload = {
                     "client_id": client_id,
                     "keyword": kw,
                     "location": location or "Australia",
                     "position": result.get("position"),
+                    "map_position": map_result.get("map_position"),
                     "url": result.get("url"),
                     "week_start": week_start.isoformat(),
                     "captured_at": now.isoformat(),
@@ -163,7 +209,7 @@ async def run_seo_rankings_all_clients() -> None:
         # Generate and send the report
         try:
             report_text = await _generate_report_safe(
-                business_name=client.get("business_name", ""),
+                business_name=business_name,
                 this_week=this_week,
                 last_week=last_week,
             )

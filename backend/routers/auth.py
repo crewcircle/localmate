@@ -2,7 +2,7 @@ from datetime import datetime, timedelta
 import pytz
 import stripe
 import logging
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from db import get_db
 from config import settings
 from services.crypto import encrypt
@@ -82,8 +82,18 @@ async def get_gbp_oauth_url(client_id: str = Query(...)):
 
 
 @router.get("/gbp-callback")
-async def gbp_callback(code: str = Query(...), state: str = Query(...)):
-    """Google OAuth callback — exchange code, encrypt tokens, store on client."""
+async def gbp_callback(request: Request, code: str = Query(...), state: str = Query(...)):
+    """Google OAuth callback — exchange code, encrypt tokens, store on client.
+
+    After tokens are stored, enqueues GBP notification provisioning via arq
+    (C4 — not fire-and-forget). The provisioning task resolves the GBP account
+    id from the locations table (C2) and sets up Pub/Sub topic + IAM + push
+    subscription + notification setting.
+
+    The OAuth ``resourceName`` is ``accounts/{account_id}/locations/{location_id}``;
+    we parse both and store them on the client's default location row so
+    provisioning can resolve the account id.
+    """
     client_id = state
     try:
         token_response = await exchange_code_for_tokens(code)
@@ -92,14 +102,70 @@ async def gbp_callback(code: str = Query(...), state: str = Query(...)):
 
         encrypted_access = encrypt(token_response["access_token"])
         encrypted_refresh = encrypt(token_response.get("refresh_token", ""))
-        location_id = token_response.get("resourceName", "").split("/")[-1] or None
+
+        # Parse resourceName: accounts/{account_id}/locations/{location_id}
+        resource_name = token_response.get("resourceName", "")
+        account_id = None
+        gbp_location_id = None
+        parts = resource_name.split("/")
+        for i, part in enumerate(parts):
+            if part == "accounts" and i + 1 < len(parts):
+                account_id = parts[i + 1]
+            elif part == "locations" and i + 1 < len(parts):
+                gbp_location_id = parts[i + 1]
 
         db = get_db()
         db.table("clients").update({
             "gbp_access_token": encrypted_access,
             "gbp_refresh_token": encrypted_refresh,
-            "gbp_location_id": location_id,
+            "gbp_location_id": gbp_location_id,
         }).eq("id", client_id).execute()
+
+        # C2: update locations table with GBP account/location identity so
+        # provisioning (and the approval path) can resolve by location.
+        if gbp_location_id:
+            loc_resp = (
+                db.table("locations")
+                .select("id")
+                .eq("client_id", client_id)
+                .eq("is_default", True)
+                .maybe_single()
+                .execute()
+            )
+            loc_update = {
+                "gbp_account_id": account_id,
+                "gbp_location_id": gbp_location_id,
+            }
+            if loc_resp and loc_resp.data:
+                db.table("locations").update(loc_update).eq(
+                    "id", loc_resp.data["id"]
+                ).execute()
+            else:
+                # No default location yet — create one carrying the GBP identity.
+                db.table("locations").insert({
+                    "client_id": client_id,
+                    "name": "Default Location",
+                    "gbp_account_id": account_id,
+                    "gbp_location_id": gbp_location_id,
+                    "is_default": True,
+                }).execute()
+
+        # C4: enqueue GBP provisioning via arq (not fire-and-forget).
+        # Failures here are non-fatal — provisioning can be re-triggered
+        # manually via scripts/setup_gbp_notification.py.
+        arq = getattr(request.app.state, "arq", None)
+        if arq is not None:
+            try:
+                await arq.enqueue_job("provision_gbp_notifications_task", client_id)
+                logger.info("Enqueued GBP provisioning for client %s", client_id)
+            except Exception as e:
+                logger.warning(
+                    "Could not enqueue GBP provisioning for %s: %s", client_id, e
+                )
+        else:
+            logger.warning(
+                "arq pool unavailable — GBP provisioning not enqueued for %s", client_id
+            )
 
         return {"status": "connected", "client_id": client_id}
     except ValueError as e:
@@ -180,3 +246,74 @@ async def billing_setup_intent(payload: dict):
     except Exception as e:
         logger.error(f"Stripe SetupIntent failed for {client_id}: {e}")
         raise HTTPException(status_code=502, detail="Payment setup failed")
+
+
+# ---------------------------------------------------------------------------
+# Square OAuth (mirror GBP flow)
+# ---------------------------------------------------------------------------
+
+@router.get("/square-oauth-url")
+async def get_square_oauth_url(client_id: str = Query(...)):
+    """Get Square OAuth URL for a client to connect their Square account."""
+    try:
+        from services.square_oauth import get_square_auth_url
+        url = get_square_auth_url(client_id)
+        return {"oauth_url": url}
+    except Exception as e:
+        logger.error(f"Square OAuth URL failed for {client_id}: {e}")
+        raise HTTPException(status_code=500, detail="OAuth URL generation failed")
+
+
+@router.get("/square-callback")
+async def square_callback(code: str = Query(...), state: str = Query(...)):
+    """Square OAuth callback — exchange code, encrypt tokens, store on client,
+    then list locations and pair square_location_id onto locations rows."""
+    client_id = state
+    try:
+        from services.square_oauth import exchange_code_for_tokens, list_locations
+
+        token_response = await exchange_code_for_tokens(code)
+        if "access_token" not in token_response:
+            raise ValueError("Square token exchange missing access_token")
+
+        encrypted_access = encrypt(token_response["access_token"])
+        encrypted_refresh = encrypt(token_response.get("refresh_token", ""))
+        merchant_id = token_response.get("merchant_id", "")
+        expires_at = token_response.get("expires_at")
+
+        db = get_db()
+        db.table("clients").update({
+            "square_access_token": encrypted_access,
+            "square_refresh_token": encrypted_refresh,
+            "square_merchant_id": merchant_id,
+            "square_token_expires_at": expires_at,
+        }).eq("id", client_id).execute()
+
+        # List locations and pair square_location_id onto matching locations rows
+        locations = await list_locations(token_response["access_token"])
+        for sq_loc in locations:
+            sq_loc_id = sq_loc.get("id")
+            sq_loc_name = sq_loc.get("name", "")
+            if not sq_loc_id:
+                continue
+            # Match by name to existing location (D11-A auto-map by name)
+            existing = (
+                db.table("locations")
+                .select("id")
+                .eq("client_id", client_id)
+                .eq("name", sq_loc_name)
+                .maybe_single()
+                .execute()
+            )
+            if existing and existing.data:
+                db.table("locations").update({
+                    "square_location_id": sq_loc_id,
+                }).eq("id", existing.data["id"]).execute()
+
+        return {"status": "connected", "client_id": client_id, "merchant_id": merchant_id}
+    except ValueError as e:
+        logger.error(f"Square OAuth validation failed for {client_id}: {e}")
+        raise HTTPException(status_code=400, detail=f"Square OAuth failed: {e}")
+    except Exception as e:
+        logger.error(f"Square OAuth callback failed for {client_id}: {e}")
+        raise HTTPException(status_code=400, detail=f"Square OAuth failed: {e}")
