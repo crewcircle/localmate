@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db import init_db
 from scheduler import create_scheduler
-from routers import auth, webhooks, drafts
+from routers import auth, webhooks, drafts, practitioners
 
 logging.basicConfig(level=logging.INFO)
 
@@ -75,6 +75,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth")
 app.include_router(webhooks.router, prefix="/webhooks")
 app.include_router(drafts.router, prefix="/drafts")
+app.include_router(practitioners.router, prefix="/practitioners")
 try:
     from routers import approve
     app.include_router(approve.router, prefix="/approve")

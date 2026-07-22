@@ -445,7 +445,9 @@ async def run_competitor_weekly(ctx: dict) -> None:
 async def run_appointment_daily(ctx: dict) -> None:
     from jobs.appointment_followup import run_appointment_followup_all_clients
 
-    await run_appointment_followup_all_clients()
+    # Thread the worker's arq pool so outbound SMS sends enqueue on the existing
+    # pool (C4) rather than opening a new connection per send.
+    await run_appointment_followup_all_clients(ctx.get("redis"))
 
 
 async def run_trial_hourly(ctx: dict) -> None:
