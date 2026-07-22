@@ -266,8 +266,10 @@ async def process_menu_update(ctx: dict, event_id: str) -> dict:
     async def dispatch(event: dict) -> None:
         payload = event.get("payload", {})
         client_id = payload.get("client_id")
+        location_id = payload.get("location_id")
         item = payload.get("item", {})
-        result = await sync_menu_item(client_id, item)
+        origin = payload.get("origin", "sheets")
+        result = await sync_menu_item(client_id, location_id, item, origin)
         # sync_menu_item swallows per-target errors and returns a status dict.
         # A hard failure (client missing) or any un-synced target must propagate
         # so the inbound task retries / dead-letters rather than marking done.
@@ -378,27 +380,41 @@ async def post_gbp_reply_task(
     )
 
 
-async def square_sync_task(ctx: dict, client_id: str, item: dict) -> Any:
-    """Durable Square catalog upsert (migrated in Phase 3: jobs/menu_sync.py).
+async def square_sync_task(ctx: dict, client_id: str, location_id: str, item: dict) -> Any:
+    """Durable Square catalog upsert (Phase 3: per-client OAuth token).
 
-    Security (C4/D4): enqueues only ``client_id`` + the item — never the client
-    record (which carries square_access_token / PMS credentials). The client row
-    is loaded inside the worker.
+    Security (C4/D4): enqueues only ``client_id`` + ``location_id`` + the item —
+    never the client record (which carries square_access_token / PMS credentials).
+    The client row and Square token are resolved inside the worker via
+    ``square_oauth.get_valid_token`` (per-client OAuth, not global settings).
     """
-    from jobs.menu_sync import _sync_square
+    from services.square_oauth import get_valid_token
+    from services.square_catalog import upsert_item as square_upsert
 
     async def _coro() -> Any:
-        # Load client (which carries the Square credential) INSIDE the coroutine
-        # so a DB outage / missing client is retried + dead-lettered like any
-        # other outbound failure (C4), not raised bare before _run_outbound.
         db = get_db()
         client = _load_client(db, client_id)
         if not client:
             raise RuntimeError(f"square_sync_task: client {client_id} not found")
-        return await _sync_square(client, item)
+        loc_resp = (
+            db.table("locations")
+            .select("*")
+            .eq("id", location_id)
+            .maybe_single()
+            .execute()
+        )
+        if not loc_resp.data:
+            raise RuntimeError(f"square_sync_task: location {location_id} not found")
+        access_token = await get_valid_token(client)
+        result = await square_upsert(
+            access_token, loc_resp.data["square_location_id"], item
+        )
+        return {"synced": True, "external_id": result.get("id"),
+                "external_version": result.get("version")}
 
     return await _run_outbound(
-        ctx, "square", client_id, {"client_id": client_id, "item": item},
+        ctx, "square", client_id,
+        {"client_id": client_id, "location_id": location_id, "item": item},
         _coro,
     )
 

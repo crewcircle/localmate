@@ -9,7 +9,11 @@ logger = logging.getLogger(__name__)
 
 @router.post("/review/{draft_id}")
 async def approve_review(draft_id: str, edited_text: str | None = None, auth: dict = Depends(require_auth)):
-    """Approve a draft and post the reply to GBP. If edited_text is provided, post that instead."""
+    """Approve a draft and post the reply to GBP. If edited_text is provided, post that instead.
+
+    C2: resolves the GBP location path from the draft's location_id (locations
+    table), not from clients.gbp_location_id.
+    """
     db = get_db()
     draft_resp = db.table("drafts").select("*").eq("id", draft_id).single().execute()
     if not draft_resp.data:
@@ -21,19 +25,34 @@ async def approve_review(draft_id: str, edited_text: str | None = None, auth: di
 
     reply_text = edited_text if edited_text else draft["draft_text"]
 
-    client_resp = db.table("clients").select("gbp_access_token, gbp_location_id").eq("id", draft["client_id"]).single().execute()
+    client_resp = db.table("clients").select("gbp_access_token").eq("id", draft["client_id"]).single().execute()
     if not client_resp.data:
         raise HTTPException(status_code=404, detail="Client not found")
 
-    client = client_resp.data
-    access_token = client.get("gbp_access_token")
-    location_id = client.get("gbp_location_id")
+    access_token = client_resp.data.get("gbp_access_token")
+
+    # C2: resolve GBP location path from draft's location_id (locations table)
+    gbp_location_path = None
+    draft_location_id = draft.get("location_id")
+    if draft_location_id:
+        loc_resp = (
+            db.table("locations")
+            .select("gbp_account_id, gbp_location_id")
+            .eq("id", draft_location_id)
+            .maybe_single()
+            .execute()
+        )
+        if loc_resp.data:
+            acct = loc_resp.data.get("gbp_account_id")
+            loc = loc_resp.data.get("gbp_location_id")
+            if acct and loc:
+                gbp_location_path = f"accounts/{acct}/locations/{loc}"
 
     posted = False
-    if access_token and location_id and draft.get("source_id"):
+    if access_token and gbp_location_path and draft.get("source_id"):
         try:
             from services.gbp import post_review_reply
-            posted = await post_review_reply(location_id, draft["source_id"], reply_text, access_token)
+            posted = await post_review_reply(gbp_location_path, draft["source_id"], reply_text, access_token)
         except Exception as e:
             logger.error(f"GBP post failed for draft {draft_id}: {e}")
 

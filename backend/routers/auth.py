@@ -180,3 +180,74 @@ async def billing_setup_intent(payload: dict):
     except Exception as e:
         logger.error(f"Stripe SetupIntent failed for {client_id}: {e}")
         raise HTTPException(status_code=502, detail="Payment setup failed")
+
+
+# ---------------------------------------------------------------------------
+# Square OAuth (mirror GBP flow)
+# ---------------------------------------------------------------------------
+
+@router.get("/square-oauth-url")
+async def get_square_oauth_url(client_id: str = Query(...)):
+    """Get Square OAuth URL for a client to connect their Square account."""
+    try:
+        from services.square_oauth import get_square_auth_url
+        url = get_square_auth_url(client_id)
+        return {"oauth_url": url}
+    except Exception as e:
+        logger.error(f"Square OAuth URL failed for {client_id}: {e}")
+        raise HTTPException(status_code=500, detail="OAuth URL generation failed")
+
+
+@router.get("/square-callback")
+async def square_callback(code: str = Query(...), state: str = Query(...)):
+    """Square OAuth callback — exchange code, encrypt tokens, store on client,
+    then list locations and pair square_location_id onto locations rows."""
+    client_id = state
+    try:
+        from services.square_oauth import exchange_code_for_tokens, list_locations
+
+        token_response = await exchange_code_for_tokens(code)
+        if "access_token" not in token_response:
+            raise ValueError("Square token exchange missing access_token")
+
+        encrypted_access = encrypt(token_response["access_token"])
+        encrypted_refresh = encrypt(token_response.get("refresh_token", ""))
+        merchant_id = token_response.get("merchant_id", "")
+        expires_at = token_response.get("expires_at")
+
+        db = get_db()
+        db.table("clients").update({
+            "square_access_token": encrypted_access,
+            "square_refresh_token": encrypted_refresh,
+            "square_merchant_id": merchant_id,
+            "square_token_expires_at": expires_at,
+        }).eq("id", client_id).execute()
+
+        # List locations and pair square_location_id onto matching locations rows
+        locations = await list_locations(token_response["access_token"])
+        for sq_loc in locations:
+            sq_loc_id = sq_loc.get("id")
+            sq_loc_name = sq_loc.get("name", "")
+            if not sq_loc_id:
+                continue
+            # Match by name to existing location (D11-A auto-map by name)
+            existing = (
+                db.table("locations")
+                .select("id")
+                .eq("client_id", client_id)
+                .eq("name", sq_loc_name)
+                .maybe_single()
+                .execute()
+            )
+            if existing and existing.data:
+                db.table("locations").update({
+                    "square_location_id": sq_loc_id,
+                }).eq("id", existing.data["id"]).execute()
+
+        return {"status": "connected", "client_id": client_id, "merchant_id": merchant_id}
+    except ValueError as e:
+        logger.error(f"Square OAuth validation failed for {client_id}: {e}")
+        raise HTTPException(status_code=400, detail=f"Square OAuth failed: {e}")
+    except Exception as e:
+        logger.error(f"Square OAuth callback failed for {client_id}: {e}")
+        raise HTTPException(status_code=400, detail=f"Square OAuth failed: {e}")

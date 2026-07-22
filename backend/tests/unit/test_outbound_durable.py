@@ -197,32 +197,67 @@ async def test_post_gbp_reply_task_decrypt_failure_retries_then_dead_letters():
 
 @pytest.mark.asyncio
 async def test_square_sync_task_loads_client_in_worker():
-    """The task takes client_id only and loads the client (with secrets) itself."""
+    """The task takes client_id + location_id only and loads both inside the worker.
+    Uses per-client OAuth via square_oauth.get_valid_token (no global token)."""
     import task_queue
 
-    db = _client_db({"id": "c1", "square_access_token": "sq_secret"})
+    db = MagicMock()
+
+    def _table(name):
+        chain = MagicMock()
+        if name == "clients":
+            chain.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+                data={"id": "c1", "square_access_token": "enc_token"}
+            )
+        elif name == "locations":
+            chain.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+                data={"id": "loc1", "square_location_id": "SQ_LOC_1"}
+            )
+        return chain
+
+    db.table.side_effect = _table
 
     with patch("task_queue.get_db", return_value=db), \
-         patch("jobs.menu_sync._sync_square", new_callable=AsyncMock,
-               return_value={"synced": True, "message": "Synced to Square"}) as mock_sync:
-        result = await task_queue.square_sync_task({"job_try": 1}, "c1", {"name": "Latte"})
+         patch("services.square_oauth.get_valid_token", new_callable=AsyncMock, return_value="sq_token") as mock_token, \
+         patch("services.square_catalog.upsert_item", new_callable=AsyncMock,
+               return_value={"id": "obj1", "version": 3}) as mock_upsert:
+        result = await task_queue.square_sync_task({"job_try": 1}, "c1", "loc1", {"name": "Latte"})
 
     assert result["synced"] is True
-    # the loaded client (not an enqueued arg) is passed to the sync fn
-    assert mock_sync.call_args[0][0]["id"] == "c1"
+    assert result["external_id"] == "obj1"
+    # token was resolved per-client inside the worker
+    assert mock_token.call_args[0][0]["id"] == "c1"
+    # upsert used the per-location square_location_id
+    assert mock_upsert.call_args[0][1] == "SQ_LOC_1"
 
 
 @pytest.mark.asyncio
-async def test_square_sync_task_soft_fail_dead_letters_on_final():
+async def test_square_sync_task_hard_fail_dead_letters_on_final():
+    """Square upsert raises (hard fail) — on final try it dead-letters."""
     import task_queue
 
-    db = _client_db({"id": "c1", "square_access_token": "sq"})
+    db = MagicMock()
+
+    def _table(name):
+        chain = MagicMock()
+        if name == "clients":
+            chain.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+                data={"id": "c1", "square_access_token": "enc"}
+            )
+        elif name == "locations":
+            chain.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
+                data={"id": "loc1", "square_location_id": "SQ_LOC_1"}
+            )
+        return chain
+
+    db.table.side_effect = _table
 
     with patch("task_queue.get_db", return_value=db), \
-         patch("jobs.menu_sync._sync_square", new_callable=AsyncMock, return_value={"synced": False, "message": "bad"}), \
+         patch("services.square_oauth.get_valid_token", new_callable=AsyncMock, return_value="sq"), \
+         patch("services.square_catalog.upsert_item", new_callable=AsyncMock, side_effect=RuntimeError("boom")), \
          patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
         with pytest.raises(RuntimeError):
-            await task_queue.square_sync_task({"job_try": task_queue.MAX_TRIES}, "c1", {"name": "Latte"})
+            await task_queue.square_sync_task({"job_try": task_queue.MAX_TRIES}, "c1", "loc1", {"name": "Latte"})
         mock_dl.assert_awaited_once()
         assert mock_dl.call_args[0][0] == "square"
 
@@ -241,13 +276,13 @@ async def test_square_sync_task_client_load_failure_retries_then_dead_letters():
     with patch("task_queue.get_db", side_effect=_boom_db), \
          patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
         with pytest.raises(Retry):
-            await task_queue.square_sync_task({"job_try": 1}, "c1", {"name": "Latte"})
+            await task_queue.square_sync_task({"job_try": 1}, "c1", "loc1", {"name": "Latte"})
         mock_dl.assert_not_awaited()
 
     with patch("task_queue.get_db", side_effect=_boom_db), \
          patch("task_queue.record_dead_letter", new_callable=AsyncMock) as mock_dl:
         with pytest.raises(ConnectionError):
-            await task_queue.square_sync_task({"job_try": task_queue.MAX_TRIES}, "c1", {"name": "Latte"})
+            await task_queue.square_sync_task({"job_try": task_queue.MAX_TRIES}, "c1", "loc1", {"name": "Latte"})
         mock_dl.assert_awaited_once()
         assert mock_dl.call_args[0][0] == "square"
 

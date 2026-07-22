@@ -25,8 +25,15 @@ class Settings(BaseSettings):
     sentry_dsn:                str = ""
     project_id:                str = "localmate"
     environment:               str = "prod"
+    # Square — global token deprecated for production (per-client OAuth is
+    # authoritative via square_oauth.get_valid_token). Kept for sandbox/dev fallback.
     square_access_token:       str = ""
     square_environment:        str = "sandbox"
+    square_app_id:             str = ""
+    square_app_secret:         str = ""
+    square_oauth_redirect_path: str = "/auth/square-callback"
+    square_webhook_signature_key: str = ""
+    menu_images_bucket:        str = "menu-images"
     supabase_jwt_secret:       str = ""
 
     # --- Phase 0: queue / worker / billing-portal infra ---

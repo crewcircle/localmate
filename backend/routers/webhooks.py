@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import hmac
 import json
 import logging
 from datetime import datetime, timezone
@@ -324,6 +325,21 @@ async def process_review(payload: dict):
         logger.warning(f"No client found for GBP location: {name}")
         return
 
+    # C2: resolve location_id from the GBP review name for draft storage
+    db = get_db()
+    gbp_loc_id = _extract_gbp_location_id(name)
+    location_id = None
+    if gbp_loc_id:
+        loc_resp = (
+            db.table("locations")
+            .select("id")
+            .eq("gbp_location_id", gbp_loc_id)
+            .maybe_single()
+            .execute()
+        )
+        if loc_resp.data:
+            location_id = loc_resp.data["id"]
+
     from middleware.trial_gate import check_trial_gate, increment_trial_usage
     gate = await check_trial_gate(client["id"], "review_drafts")
     if not gate["allowed"]:
@@ -351,9 +367,9 @@ async def process_review(payload: dict):
         raise
 
     review_id = name.split("/")[-1] if name else ""
-    db = get_db()
     db.table("drafts").insert({
         "client_id": client["id"],
+        "location_id": location_id,
         "job": "review_response",
         "source_id": review_id,
         "source": "google",
@@ -365,18 +381,48 @@ async def process_review(payload: dict):
     await increment_trial_usage(client["id"], "review_drafts")
 
 
-def resolve_client_from_location(gbp_name: str) -> dict | None:
-    """Map GBP `accounts/{accountId}/locations/{locationId}/reviews/{reviewId}` to client."""
-    db = get_db()
-    parts = gbp_name.split("/")
-    location_id = None
+def _extract_gbp_location_id(gbp_name: str) -> str | None:
+    """Extract the locationId from a GBP resource name.
+
+    Handles ``accounts/{a}/locations/{loc}/reviews/{r}`` (and similar shapes)
+    by returning the segment immediately after ``locations``.
+    """
+    parts = (gbp_name or "").split("/")
     for i, part in enumerate(parts):
         if part == "locations" and i + 1 < len(parts):
-            location_id = parts[i + 1]
-            break
-    if not location_id:
+            return parts[i + 1]
+    return None
+
+
+def resolve_client_from_location(gbp_name: str) -> dict | None:
+    """Map GBP `accounts/{accountId}/locations/{locationId}/reviews/{reviewId}` to client.
+
+    Resolves by ``locations.gbp_location_id`` (the new authoritative table per
+    C2), not ``clients.gbp_location_id`` (which is deprecated/backfilled).
+    """
+    db = get_db()
+    gbp_location_id = _extract_gbp_location_id(gbp_name)
+    if not gbp_location_id:
         return None
-    resp = db.table("clients").select("*").eq("gbp_location_id", location_id).maybe_single().execute()
+
+    # Resolve via locations table (C2 — single source of truth for GBP identity)
+    loc_resp = (
+        db.table("locations")
+        .select("client_id")
+        .eq("gbp_location_id", gbp_location_id)
+        .maybe_single()
+        .execute()
+    )
+    if not loc_resp.data:
+        return None
+
+    resp = (
+        db.table("clients")
+        .select("*")
+        .eq("id", loc_resp.data["client_id"])
+        .maybe_single()
+        .execute()
+    )
     return resp.data if resp.data else None
 
 
@@ -384,12 +430,8 @@ def resolve_client_from_location(gbp_name: str) -> dict | None:
 # Menu update (Google Sheets webhook)
 # ---------------------------------------------------------------------------
 
-@router.post("/menu-update/{client_id}")
-async def menu_update(client_id: str, payload: dict, request: Request):
-    """Persist + enqueue a Google Sheets menu change. Returns 200 fast.
-
-    item = {name, price_cents=int(float(price)*100), description, category, active}.
-    """
+def _build_menu_item(payload: dict) -> dict:
+    """Build a canonical menu item dict from a Sheets webhook payload."""
     item = {
         "name": payload.get("name"),
         "price_cents": int(float(payload.get("price", 0)) * 100),
@@ -397,16 +439,136 @@ async def menu_update(client_id: str, payload: dict, request: Request):
         "category": payload.get("category", ""),
         "active": payload.get("active", True),
     }
-    # Synthetic idempotency key: client + item name + minute bucket.
+    # Optional stable row key from Sheets (defaults to name)
+    if payload.get("sheet_row_key"):
+        item["sheet_row_key"] = payload["sheet_row_key"]
+    # Optional image_url (C5 — menu image ingestion via Sheets)
+    if payload.get("image_url"):
+        item["image_url"] = payload["image_url"]
+    return item
+
+
+async def _persist_menu_update(
+    request: Request, client_id: str, location_id: str | None, payload: dict
+) -> dict:
+    """Build a canonical item, dedupe-persist, and enqueue a Sheets menu-update.
+
+    The idempotency key is derived from ``client_id`` (+ ``location_id`` when
+    present), the item name, and a minute bucket, so a re-delivery is deduped.
+    """
+    item = _build_menu_item(payload)
     bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
-    raw = f"{client_id}:{item['name']}:{bucket}"
+    raw = ":".join(p for p in [client_id, location_id, item["name"], bucket] if p)
     idempotency_key = hashlib.sha256(raw.encode()).hexdigest()
 
     result = _persist_event(
-        "menu", idempotency_key, "menu-update", {"client_id": client_id, "item": item}
+        "menu", idempotency_key, "menu-update",
+        {"client_id": client_id, "location_id": location_id, "item": item, "origin": "sheets"},
     )
     if result["status"] == "duplicate":
         return {"status": "duplicate"}
 
     await _enqueue(request, "process_menu_update", result["event_id"])
+    return {"status": "received"}
+
+
+@router.post("/menu-update/{client_id}/{location_id}")
+async def menu_update_location(
+    client_id: str, location_id: str, payload: dict, request: Request
+):
+    """Persist + enqueue a Google Sheets menu change for a specific location."""
+    return await _persist_menu_update(request, client_id, location_id, payload)
+
+
+@router.post("/menu-update/{client_id}")
+async def menu_update(client_id: str, payload: dict, request: Request):
+    """Persist + enqueue a Google Sheets menu change (compat: resolves default location)."""
+    return await _persist_menu_update(request, client_id, None, payload)
+
+
+# ---------------------------------------------------------------------------
+# Square catalog inbound webhook
+# ---------------------------------------------------------------------------
+
+def _verify_square_signature(raw_body: bytes, signature: str, notification_url: str) -> bool:
+    """Verify Square webhook signature (HMAC-SHA256 of notification_url + raw_body)."""
+    if not settings.square_webhook_signature_key:
+        return False
+    key = settings.square_webhook_signature_key.encode()
+    message = notification_url.encode() + raw_body
+    expected = hmac.new(key, message, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+@router.post("/square/catalog")
+async def square_catalog_webhook(request: Request):
+    """Square catalog.version.updated webhook.
+
+    Verify HMAC signature, resolve client from merchant_id, read the watermark
+    from square_sync_state, call SearchCatalogObjects, apply inbound changes,
+    and persist the new latest_time watermark.
+    """
+    raw_body = await request.body()
+    signature = request.headers.get("x-square-hmacsha256-signature", "")
+    notification_url = f"https://{settings.base_domain}/webhooks/square/catalog"
+
+    if not _verify_square_signature(raw_body, signature, notification_url):
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    try:
+        payload = json.loads(raw_body)
+    except (json.JSONDecodeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid payload")
+
+    merchant_id = payload.get("merchant_id")
+    if not merchant_id:
+        raise HTTPException(status_code=400, detail="Missing merchant_id")
+
+    # Resolve client from square_merchant_id
+    db = get_db()
+    client_resp = (
+        db.table("clients")
+        .select("*")
+        .eq("square_merchant_id", merchant_id)
+        .maybe_single()
+        .execute()
+    )
+    if not client_resp.data:
+        logger.warning("Square webhook: no client for merchant_id %s", merchant_id)
+        raise HTTPException(status_code=404, detail="Unknown merchant")
+
+    client = client_resp.data
+
+    # Read watermark from square_sync_state
+    state_resp = (
+        db.table("square_sync_state")
+        .select("latest_time")
+        .eq("client_id", client["id"])
+        .maybe_single()
+        .execute()
+    )
+    begin_time = state_resp.data.get("latest_time") if state_resp.data else None
+
+    # Search for changed catalog objects
+    from services.square_oauth import get_valid_token
+    from services.square_catalog import search_changed
+    from jobs.menu_sync import apply_square_inbound
+
+    access_token = await get_valid_token(client)
+    search_result = await search_changed(access_token, begin_time)
+    changed_objects = search_result.get("objects", [])
+    new_latest_time = search_result.get("latest_time")
+
+    # Apply inbound changes (bi-directional reconciliation)
+    if changed_objects:
+        await apply_square_inbound(client["id"], changed_objects)
+
+    # Persist new watermark
+    if new_latest_time:
+        db.table("square_sync_state").upsert({
+            "client_id": client["id"],
+            "latest_time": new_latest_time,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+
     return {"status": "received"}
