@@ -1,7 +1,9 @@
 """Square Appointments adapter — mirrors services/cliniko.py interface.
 
 Uses raw httpx REST calls against the Square Bookings API.
-No Square SDK dependency.
+No Square SDK dependency. Emits the canonical normalised appointment shape (see
+:mod:`services.appointment_shape`) including practitioner (team_member_id) and a
+``claim`` of ``None`` (Square does not surface health-fund/Medicare billing).
 """
 
 import logging
@@ -10,6 +12,8 @@ from datetime import datetime
 import httpx
 
 from config import settings
+from services.appointment_shape import canonical_appointment
+from services.booking_credentials import get_credential
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +29,19 @@ _SQUARE_HEADERS = {
     "User-Agent": "CrewCircle/1.0",
 }
 
+# --- Adapter capability metadata (read by jobs/appointment_followup.py) ---
+ADAPTER_NAME = "square"
+ID_COLUMN = "square_id"             # patients table column for do_not_contact lookup
+CREDENTIAL_KEYS = ["square_access_token"]
+SUPPORTS_REBOOK = True
+AUTH_MODEL = "oauth2"
+
 
 def _get_token(client: dict) -> str:
     """Resolve Square access token from client record or global settings."""
-    return client.get("square_access_token") or getattr(settings, "square_access_token", "")
+    return get_credential(client, "square_access_token") or getattr(
+        settings, "square_access_token", ""
+    )
 
 
 def _auth_headers(client: dict) -> dict:
@@ -47,19 +60,30 @@ def _parse_date(iso_str: str | None) -> str:
 
 
 def _normalise_booking(raw: dict) -> dict:
-    """Normalise a Square booking object into our internal appointment dict."""
-    segments = raw.get("appointment_segments", [])
+    """Normalise a Square booking object into the canonical appointment dict.
+
+    Practitioner id comes from the first appointment segment's ``team_member_id``.
+    Square bookings do not embed the team member's display name (that needs a
+    separate TeamMembers lookup), so ``practitioner_name`` is left ``None`` here —
+    a future enhancement can resolve names via the Team API. Square does not surface
+    health-fund/Medicare claim data, so ``claim`` is ``None``.
+    """
+    segments = raw.get("appointment_segments", []) or []
     first_segment = segments[0] if segments else {}
     start_at = raw.get("start_at") or first_segment.get("start_at")
-    return {
-        "patient_id": raw.get("customer_id", ""),
-        "patient_name": raw.get("customer_id", "Patient"),
-        "patient_phone": None,
-        "patient_email": None,
-        "treatment_type": first_segment.get("service_variation_name", ""),
-        "appointment_date": _parse_date(start_at),
-        "status": raw.get("status", "completed"),
-    }
+    team_member_id = first_segment.get("team_member_id")
+    return canonical_appointment(
+        patient_id=raw.get("customer_id", ""),
+        patient_name=raw.get("customer_id", "Patient"),
+        patient_phone=None,
+        patient_email=None,
+        treatment_type=first_segment.get("service_variation_name", ""),
+        appointment_date=_parse_date(start_at),
+        status=raw.get("status", "completed"),
+        practitioner_id=team_member_id,
+        practitioner_name=None,
+        claim=None,
+    )
 
 
 async def get_appointments(
@@ -119,7 +143,7 @@ async def get_future_appointments(
             )
             resp.raise_for_status()
             data = resp.json()
-            return data.get("bookings", [])
+            return [_normalise_booking(b) for b in data.get("bookings", [])]
     except Exception as e:
         logger.error("Square get_future_appointments failed: %s", e)
         return []
