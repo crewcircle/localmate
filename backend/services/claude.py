@@ -173,9 +173,17 @@ async def generate_followup_message(
     patient_name: str,
     last_treatment: str,
     business_name: str,
-    channel: str
+    channel: str,
+    practitioner_name: str | None = None,
+    claim_type: str | None = None,
 ) -> str:
-    """Generate re-booking follow-up message. Called by Phase 6."""
+    """Generate re-booking follow-up message.
+
+    ``practitioner_name`` lets the copy reference the patient's usual clinician
+    (e.g. "…with Dr Chen") when known. ``claim_type`` (best-effort, PMS-sourced)
+    tunes the tone without asserting specifics — per D3-A detailed claim/health-fund
+    info is kept OUT of the SMS body.
+    """
     system_prompt = """You are writing a re-booking message for an Australian healthcare/clinic patient.
 
 SMS rules:
@@ -187,6 +195,17 @@ Email rules:
 - Max 100 words
 - Warm, personal
 
+PRACTITIONER:
+- When a practitioner name is provided, you may reference them naturally
+  (e.g. "book your next visit with Dr Chen"). Do not invent a name when none is given.
+
+CLAIM / BILLING GUARDRAILS:
+- Never quote exact dollar amounts, gaps, out-of-pocket costs or rebates unless
+  they are explicitly provided AND verified.
+- Never make medical or financial claims (e.g. "fully covered", "no out-of-pocket",
+  "bulk-billed at no cost"). Keep any claim/billing context generic at most.
+- Do not mention a health fund or Medicare by name unless explicitly provided.
+
 FORBIDDEN PHRASES:
 - "friendly reminder"
 - "reach out"
@@ -196,13 +215,25 @@ Never make up medical claims"""
 
     try:
         client = _get_client()
+        parts = [
+            f"Patient: {patient_name}",
+            f"Last treatment: {last_treatment}",
+            f"Business: {business_name}",
+            f"Channel: {channel}",
+        ]
+        if practitioner_name:
+            parts.append(f"Practitioner: {practitioner_name}")
+        if claim_type:
+            parts.append(f"Claim type: {claim_type}")
+        parts.append("\nWrite the message:")
+        user_content = "\n".join(parts)
         message = client.messages.create(
             model=MODEL,
             max_tokens=200,
             system=system_prompt,
             messages=[{
                 "role": "user",
-                "content": f"Patient: {patient_name}\nLast treatment: {last_treatment}\nBusiness: {business_name}\nChannel: {channel}\n\nWrite the message:"
+                "content": user_content,
             }]
         )
         return message.content[0].text.strip()
