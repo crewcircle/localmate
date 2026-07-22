@@ -9,13 +9,22 @@ def test_create_scheduler_registers_expected_job_ids():
 
     s = scheduler.create_scheduler()
     job_ids = {j.id for j in s.get_jobs()}
-    # Original six cron jobs keep their ids + the new reconcile job.
+    # The original six cron jobs keep their ids. Reconciliation is NOT scheduled
+    # here — it is an arq cron on the worker (single trigger, C4 item 5).
     for expected in [
         "yelp_poll", "seo_weekly", "competitor_weekly",
         "appointment_daily", "trial_hourly", "trial_emails_daily",
-        "reconcile_pending",
     ]:
         assert expected in job_ids
+    assert "reconcile_pending" not in job_ids
+
+
+def test_reconcile_not_double_scheduled():
+    """Reconciliation must fire from exactly one place (the arq worker cron)."""
+    import scheduler
+
+    task_names = {task for _job_id, task, _ in scheduler.CRON_JOBS}
+    assert "reconcile_webhooks" not in task_names
 
 
 def test_cron_job_map_targets_arq_tasks():
@@ -28,7 +37,6 @@ def test_cron_job_map_targets_arq_tasks():
     assert mapping["appointment_daily"] == "run_appointment_daily"
     assert mapping["trial_hourly"] == "run_trial_hourly"
     assert mapping["trial_emails_daily"] == "run_trial_emails_daily"
-    assert mapping["reconcile_pending"] == "reconcile_webhooks"
 
 
 @pytest.mark.asyncio

@@ -1,12 +1,23 @@
 """Webhook reconciliation (Phase 0 — mandatory, C4).
 
-Re-enqueues ``webhook_events`` rows stuck in ``pending`` older than a threshold.
-This is the durability backstop for the edge case where Redis was briefly
-unavailable when the request handler tried to enqueue: the row was still
-persisted as ``pending``, and this job picks it up.
+Re-enqueues ``webhook_events`` rows stuck in ``pending`` older than a threshold,
+and recovers rows stranded in ``processing`` by a worker that crashed mid-job.
+This is the durability backstop for two edge cases:
+  * Redis was briefly unavailable when the request handler tried to enqueue — the
+    row was persisted ``pending`` but no job exists; we re-enqueue it.
+  * A worker claimed a row (``processing``) and then died before finishing — the
+    lease is stale, so we reset it to ``pending`` and re-enqueue.
 
-Registered every 5 minutes (arq cron in ``task_queue.WorkerSettings.cron_jobs``
-and, in the scheduler role, an APScheduler enqueue of ``reconcile_webhooks``).
+Registered as a SINGLE arq cron every 5 minutes in
+``task_queue.WorkerSettings.cron_jobs`` (it is intentionally NOT also scheduled in
+``scheduler.py`` — one trigger only, to avoid duplicate re-enqueues).
+
+Idempotency: re-enqueues use a deterministic arq ``_job_id`` derived from the
+event id, so a job already queued/running for that event is NOT duplicated (arq
+drops an enqueue with a ``_job_id`` that already exists). Combined with the atomic
+``pending`` claim in ``task_queue._process_inbound``, this keeps processing
+effectively once-per-event even when the initial enqueue and a reconcile pass
+race.
 """
 import logging
 from datetime import datetime, timedelta, timezone
@@ -26,15 +37,47 @@ _PROVIDER_TASK = {
 }
 
 
+def _job_id(event_id: str) -> str:
+    """Deterministic arq job id for an event's processing job.
+
+    Using a stable id makes re-enqueue idempotent: arq will not queue a second
+    job while one with the same id is queued/in-flight.
+    """
+    return f"process-webhook-{event_id}"
+
+
+def _recover_stale_processing(db, cutoff: str) -> int:
+    """Reset rows stuck in ``processing`` past the cutoff back to ``pending``.
+
+    These are leases held by a worker that crashed mid-job. Resetting them lets
+    the pending sweep below re-enqueue them. Returns the number reset.
+    """
+    resp = (
+        db.table("webhook_events")
+        .update({"status": "pending"})
+        .eq("status", "processing")
+        .lt("created_at", cutoff)
+        .execute()
+    )
+    recovered = len(resp.data) if resp and resp.data else 0
+    if recovered:
+        logger.warning("reconcile: recovered %d stale 'processing' rows", recovered)
+    return recovered
+
+
 async def reconcile_pending_webhooks(redis=None) -> dict:
-    """Find stale ``pending`` webhook_events and re-enqueue their processing task.
+    """Recover stale ``processing`` leases and re-enqueue stale ``pending`` rows.
 
     ``redis`` is an arq pool (``ctx['redis']`` when called from the worker cron).
-    When ``None`` (e.g. called from APScheduler), a fresh pool is created.
+    When ``None`` (e.g. called directly), a fresh pool is created.
     """
     db = get_db()
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=STALE_MINUTES)).isoformat()
 
+    # 1) Recover leases held by crashed workers (processing → pending).
+    recovered = _recover_stale_processing(db, cutoff)
+
+    # 2) Re-enqueue stale pending rows (including the ones just recovered).
     resp = (
         db.table("webhook_events")
         .select("id, provider")
@@ -44,7 +87,7 @@ async def reconcile_pending_webhooks(redis=None) -> dict:
     )
     rows = resp.data or []
     if not rows:
-        return {"reenqueued": 0}
+        return {"reenqueued": 0, "recovered": recovered}
 
     own_pool = False
     if redis is None:
@@ -61,8 +104,11 @@ async def reconcile_pending_webhooks(redis=None) -> dict:
                 logger.warning("reconcile: unknown provider %s for %s", row.get("provider"), row["id"])
                 continue
             try:
-                await redis.enqueue_job(task, row["id"])
-                reenqueued += 1
+                # Deterministic _job_id → arq ignores a duplicate enqueue for an
+                # event whose job is already queued/running.
+                job = await redis.enqueue_job(task, row["id"], _job_id=_job_id(row["id"]))
+                if job is not None:
+                    reenqueued += 1
             except Exception as e:
                 logger.error("reconcile: failed to re-enqueue %s: %s", row["id"], e)
     finally:
@@ -72,5 +118,7 @@ async def reconcile_pending_webhooks(redis=None) -> dict:
             except Exception:
                 pass
 
-    logger.info("reconcile_pending_webhooks re-enqueued %d rows", reenqueued)
-    return {"reenqueued": reenqueued}
+    logger.info(
+        "reconcile_pending_webhooks recovered %d, re-enqueued %d rows", recovered, reenqueued
+    )
+    return {"reenqueued": reenqueued, "recovered": recovered}

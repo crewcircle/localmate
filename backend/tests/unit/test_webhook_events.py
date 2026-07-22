@@ -43,7 +43,10 @@ async def test_stripe_webhook_persists_and_enqueues():
     assert insert_arg["provider"] == "stripe"
     assert insert_arg["idempotency_key"] == "evt_123"
     assert insert_arg["status"] == "pending"
-    request.app.state.arq.enqueue_job.assert_awaited_once_with("process_stripe_event", "evt-stripe-1")
+    # enqueued with a deterministic _job_id (dedupes vs reconcile re-enqueue)
+    call = request.app.state.arq.enqueue_job.call_args
+    assert call[0] == ("process_stripe_event", "evt-stripe-1")
+    assert call[1]["_job_id"] == "process-webhook-evt-stripe-1"
 
 
 @pytest.mark.asyncio
@@ -87,7 +90,9 @@ async def test_menu_update_persists_and_enqueues():
     assert insert_arg["provider"] == "menu"
     assert insert_arg["payload"]["client_id"] == "client-1"
     assert insert_arg["payload"]["item"]["price_cents"] == 550
-    request.app.state.arq.enqueue_job.assert_awaited_once_with("process_menu_update", "evt-menu-1")
+    call = request.app.state.arq.enqueue_job.call_args
+    assert call[0] == ("process_menu_update", "evt-menu-1")
+    assert call[1]["_job_id"] == "process-webhook-evt-menu-1"
 
 
 @pytest.mark.asyncio
@@ -117,3 +122,57 @@ def test_menu_idempotency_key_is_stable_within_minute():
     # Two identical items in same minute bucket hash to the same key structure.
     raw = "client-1:Flat White:202607220800"
     assert hashlib.sha256(raw.encode()).hexdigest()  # deterministic
+
+
+@pytest.mark.asyncio
+async def test_persist_event_unique_violation_is_duplicate():
+    """A real Postgres unique-violation (23505) is a benign duplicate."""
+    from routers import webhooks
+    from postgrest.exceptions import APIError
+
+    db = MagicMock()
+    db.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=None)
+    db.table.return_value.insert.return_value.execute.side_effect = APIError(
+        {"code": "23505", "message": "duplicate key value violates unique constraint", "details": "", "hint": None}
+    )
+
+    with patch("routers.webhooks.get_db", return_value=db):
+        result = webhooks._persist_event("stripe", "evt_dup", "type", {})
+    assert result["status"] == "duplicate"
+
+
+@pytest.mark.asyncio
+async def test_persist_event_non_unique_error_reraises():
+    """A DB outage / permission / other error must NOT be acked as duplicate — it re-raises."""
+    from routers import webhooks
+    from postgrest.exceptions import APIError
+
+    db = MagicMock()
+    db.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=None)
+    db.table.return_value.insert.return_value.execute.side_effect = APIError(
+        {"code": "42501", "message": "permission denied for table webhook_events", "details": "", "hint": None}
+    )
+
+    with patch("routers.webhooks.get_db", return_value=db):
+        with pytest.raises(APIError):
+            webhooks._persist_event("stripe", "evt_x", "type", {})
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_db_outage_propagates():
+    """A DB failure during persist must surface (non-200) so Stripe retries — not a false duplicate/200."""
+    from routers import webhooks
+
+    db = MagicMock()
+    db.table.return_value.select.return_value.eq.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(data=None)
+    db.table.return_value.insert.return_value.execute.side_effect = RuntimeError("connection refused")
+    event = {"id": "evt_o", "type": "customer.subscription.updated", "data": {"object": {}}}
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b"{}")
+    request.headers = {"stripe-signature": "sig"}
+
+    with patch("routers.webhooks.get_db", return_value=db), \
+         patch("routers.webhooks.stripe.Webhook.construct_event", return_value=event):
+        with pytest.raises(RuntimeError):
+            await webhooks.stripe_webhook(request)

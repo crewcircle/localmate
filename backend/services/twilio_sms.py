@@ -12,8 +12,10 @@ def _get_client():
 async def send_sms(to: str, body: str, state: str = "NSW") -> dict:
     """Send SMS via Twilio. Checks AU public holiday first — skips if holiday.
 
-    Returns ``{sent: True, sid: ...}`` on success or
-    ``{sent: False, reason: ...}`` on failure / holiday block.
+    Returns ``{sent: True, sid: ...}`` on success,
+    ``{sent: False, skipped: True, reason: ...}`` when skipped for a holiday
+    (a legitimate no-op — the durable task must NOT retry this), or
+    ``{sent: False, reason: ...}`` on a real send failure.
     """
     # Lazy import avoids circular dependency — appointment_followup imports us.
     from jobs.appointment_followup import is_au_public_holiday
@@ -21,7 +23,7 @@ async def send_sms(to: str, body: str, state: str = "NSW") -> dict:
 
     if is_au_public_holiday(date.today(), state):
         logger.info("Skipping SMS — AU public holiday in %s", state)
-        return {"sent": False, "reason": "AU public holiday — skipped"}
+        return {"sent": False, "skipped": True, "reason": "AU public holiday — skipped"}
 
     try:
         client = _get_client()

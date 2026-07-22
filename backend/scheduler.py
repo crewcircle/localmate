@@ -5,6 +5,11 @@ HA/leader-election; see C4). Each cron trigger enqueues an arq job on the shared
 Redis pool rather than executing business logic in-process. The worker container
 executes the enqueued jobs. This container must be single-instance so cron jobs
 fire exactly once (no duplicate fire); no advisory lock is used (that is D8-B).
+
+NOTE: the mandatory 5-minute webhook reconciliation (C4) is NOT scheduled here —
+it is registered as an arq ``cron_job`` in ``task_queue.WorkerSettings`` and runs
+on the worker. Scheduling it in both places would double-fire reconciliation and
+enqueue duplicate processing jobs, so there is exactly ONE reconcile trigger.
 """
 import logging
 
@@ -25,8 +30,8 @@ CRON_JOBS = [
     ("appointment_daily", "run_appointment_daily", CronTrigger(hour=8)),
     ("trial_hourly", "run_trial_hourly", CronTrigger(minute=0)),
     ("trial_emails_daily", "run_trial_emails_daily", CronTrigger(hour=9)),
-    # Mandatory reconciliation backstop (C4) — every 5 minutes.
-    ("reconcile_pending", "reconcile_webhooks", CronTrigger(minute="*/5")),
+    # Reconciliation is NOT scheduled here — it is an arq cron on the worker
+    # (task_queue.WorkerSettings.cron_jobs) so it fires from exactly one place.
 ]
 
 

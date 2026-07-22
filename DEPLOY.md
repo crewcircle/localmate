@@ -45,6 +45,25 @@ Apply `supabase/migrations/010_webhook_events.sql`, `011_dead_letter.sql`, `012_
 
 `docker compose stop localmate-worker localmate-scheduler localmate-redis` reverts to web-only. Inbound webhooks still persist to `webhook_events` as `pending` (nothing crashes); processing resumes when the worker + Redis come back and the reconciler re-enqueues the backlog.
 
+### Phase 0 staged integration gate (C10 — MUST PASS before merge)
+
+Unit tests mock Redis/Postgres, which cannot prove the durability behaviour. Before the Phase 0 PR merges to prod, run the executable gate — it spins up throwaway `postgres:15-alpine` + `redis:7-alpine` containers and **exits non-zero on any failed acceptance check** (nothing to eyeball):
+
+```bash
+bash scripts/phase0_staging_gate.sh
+```
+
+It asserts, and FAILS the build otherwise:
+
+1. **Migrations** — Phase 0 migrations `010`/`011`/`012` apply cleanly on the reconstructed baseline; `webhook_events` + `dead_letter` exist with a `service_role_all` RLS policy; `012` added the five booking-credential columns on `clients`. (A pre-existing baseline-migration quirk already live in prod is a warning, not a Phase 0 failure.)
+2. **Worker drain / restart** — an enqueued inbound job is drained by a real arq worker to `status='done'`.
+3. **Retry + dead-letter** — a permanently-failing job is retried up to `MAX_TRIES` (real `arq.Retry` semantics) and then lands as exactly one `dead_letter` row.
+4. **Reconciliation** — a stale `pending` row is re-enqueued and a stale `processing` lease is reset to `pending` and re-enqueued.
+5. **Exactly-once / dedupe** — enqueuing the same event twice with the deterministic `_job_id` yields a single job (arq drops the duplicate).
+6. **Redis durability (D9-A)** — the gate refuses to pass unless Redis is `noeviction` + AOF, so job state is never silently dropped.
+
+Record the gate's `ALL PHASE 0 STAGING GATE CHECKS PASSED` output on the PR before merge.
+
 
 ---
 

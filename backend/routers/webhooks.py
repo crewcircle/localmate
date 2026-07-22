@@ -18,10 +18,29 @@ stripe.api_key = settings.stripe_secret_key
 # Durable persistence helpers
 # ---------------------------------------------------------------------------
 
+def _is_unique_violation(exc: Exception) -> bool:
+    """True only for a Postgres unique-violation (SQLSTATE 23505).
+
+    supabase-py raises ``postgrest.exceptions.APIError`` whose ``code`` carries
+    the SQLSTATE. Only a genuine duplicate key is a benign duplicate; every other
+    persistence error (outage, permission, malformed payload, missing migration)
+    must propagate so the provider retries rather than getting a false 200.
+    """
+    code = getattr(exc, "code", None)
+    if code == "23505":
+        return True
+    # Fallback for error shapes that stash the code in args/message.
+    text = str(getattr(exc, "message", "") or exc)
+    return "23505" in text or "duplicate key value" in text
+
+
 def _persist_event(provider: str, idempotency_key: str, event_type: str | None, payload: dict) -> dict:
     """Insert a webhook_events row (status='pending'). Returns
     ``{"status": "persisted", "event_id": id}`` or ``{"status": "duplicate"}``
     when the (provider, idempotency_key) already exists.
+
+    Raises on any persistence error that is NOT a unique-violation, so the
+    provider retries instead of receiving a false 200 with no durable row.
     """
     db = get_db()
     existing = (
@@ -50,9 +69,14 @@ def _persist_event(provider: str, idempotency_key: str, event_type: str | None, 
             .execute()
         )
     except Exception as e:
-        # Unique-constraint race → treat as duplicate rather than 500.
-        logger.info("webhook_events insert conflict for %s/%s: %s", provider, idempotency_key, e)
-        return {"status": "duplicate"}
+        # Only a unique-constraint race is a benign duplicate. Everything else
+        # (DB outage, permission, bad payload, missing migration) must NOT be
+        # acked as duplicate — re-raise so the provider retries.
+        if _is_unique_violation(e):
+            logger.info("webhook_events insert conflict for %s/%s (dedup)", provider, idempotency_key)
+            return {"status": "duplicate"}
+        logger.error("webhook_events insert failed for %s/%s: %s", provider, idempotency_key, e)
+        raise
 
     event_id = resp.data[0]["id"] if resp.data else None
     return {"status": "persisted", "event_id": event_id}
@@ -60,13 +84,19 @@ def _persist_event(provider: str, idempotency_key: str, event_type: str | None, 
 
 async def _enqueue(request: Request, task: str, event_id: str) -> None:
     """Enqueue a processing task on the app's arq pool. On failure the row stays
-    'pending' and the reconciler re-enqueues it (Redis-briefly-down edge case)."""
+    'pending' and the reconciler re-enqueues it (Redis-briefly-down edge case).
+
+    Uses a deterministic ``_job_id`` (same scheme as the reconciler) so the
+    initial enqueue and a reconcile re-enqueue can never create two concurrent
+    jobs for the same event."""
+    from utils.reconcile import _job_id
+
     arq = getattr(request.app.state, "arq", None)
     if arq is None:
         logger.warning("arq pool unavailable — leaving event %s pending for reconcile", event_id)
         return
     try:
-        await arq.enqueue_job(task, event_id)
+        await arq.enqueue_job(task, event_id, _job_id=_job_id(event_id))
     except Exception as e:
         logger.error("enqueue %s(%s) failed — left pending for reconcile: %s", task, event_id, e)
 
@@ -170,10 +200,17 @@ async def fetch_review_resource(review_name: str) -> dict:
     """Fetch a GBP review resource by its full resource name.
 
     ``review_name`` is ``accounts/{a}/locations/{l}/reviews/{r}``. Resolves the
-    owning client's access token and GETs the review via the GBP reviews API.
-    Returns the review resource dict (empty dict when unavailable).
+    owning client, **decrypts** the stored GBP access token (both tokens are
+    Fernet-encrypted at rest by ``auth.gbp_callback``), and GETs the review. On a
+    401 the access token is refreshed (using the decrypted refresh token) and the
+    request retried once.
+
+    Returns the review resource dict. Returns ``{}`` only when the client/review
+    cannot be resolved (unrecoverable). RAISES on transport/auth failure so the
+    caller keeps the delivery retryable instead of persisting an empty review.
     """
     import httpx
+    from services.crypto import decrypt
     from services.gbp import GBP_REVIEWS_BASE, refresh_access_token
 
     client = resolve_client_from_location(review_name)
@@ -181,31 +218,43 @@ async def fetch_review_resource(review_name: str) -> dict:
         logger.warning("fetch_review_resource: no client for %s", review_name)
         return {}
 
-    access_token = client.get("gbp_access_token", "")
-    refresh_token = client.get("gbp_refresh_token", "")
+    enc_access = client.get("gbp_access_token", "")
+    enc_refresh = client.get("gbp_refresh_token", "")
+    access_token = decrypt(enc_access) if enc_access else ""
+    refresh_token = decrypt(enc_refresh) if enc_refresh else ""
     if not access_token and refresh_token:
-        try:
-            access_token = await refresh_access_token(refresh_token)
-        except Exception as e:
-            logger.error("fetch_review_resource: token refresh failed: %s", e)
-            return {}
+        access_token = await refresh_access_token(refresh_token)
 
     url = f"{GBP_REVIEWS_BASE}/{review_name}"
-    headers = {"Authorization": f"Bearer {access_token}"}
-    try:
+
+    async def _get(token: str):
         async with httpx.AsyncClient() as http:
-            resp = await http.get(url, headers=headers, timeout=15)
+            resp = await http.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
             resp.raise_for_status()
             return resp.json()
-    except httpx.HTTPError as e:
+
+    try:
+        return await _get(access_token)
+    except httpx.HTTPStatusError as e:
+        # Refresh + retry once on an expired/invalid access token.
+        if e.response is not None and e.response.status_code == 401 and refresh_token:
+            logger.info("fetch_review_resource: 401 — refreshing token and retrying")
+            access_token = await refresh_access_token(refresh_token)
+            return await _get(access_token)
         logger.error("fetch_review_resource GET failed for %s: %s", review_name, e)
-        return {}
+        raise
 
 
 @router.post("/inbound-review")
 async def inbound_review(request: Request):
     """GBP review notification (Pub/Sub push). Decode envelope, dedupe by
-    messageId, fetch the review resource, persist + enqueue. Returns 200 fast."""
+    ``messageId`` BEFORE any provider call, fetch the review resource, persist +
+    enqueue. Returns 200 fast.
+
+    Ordering matters: dedup happens first so a duplicate delivery never triggers
+    a second GBP fetch. A failed/empty fetch is never persisted-and-marked-done —
+    it returns a non-2xx so Pub/Sub redelivers and we retry the fetch.
+    """
     envelope = await request.json()
     try:
         decoded = decode_pubsub_envelope(envelope)
@@ -215,6 +264,20 @@ async def inbound_review(request: Request):
     message_id = decoded["message_id"]
     notification = decoded["notification"]
 
+    # Dedup FIRST — before any provider work — so duplicate deliveries don't
+    # re-hit the GBP API (and don't race).
+    db = get_db()
+    existing = (
+        db.table("webhook_events")
+        .select("id, status")
+        .eq("provider", "gbp")
+        .eq("idempotency_key", message_id)
+        .maybe_single()
+        .execute()
+    )
+    if existing and existing.data:
+        return {"status": "duplicate", "event_id": existing.data["id"]}
+
     # The notification identifies the review resource (accounts/.../reviews/{id}).
     review_name = (
         notification.get("review")
@@ -222,10 +285,21 @@ async def inbound_review(request: Request):
         or notification.get("reviewName", "")
     )
 
-    review = await fetch_review_resource(review_name) if review_name else {}
-    # Build the payload the process_review task consumes. Prefer the fetched
-    # resource; fall back to the notification fields.
-    payload = dict(review) if review else {}
+    try:
+        review = await fetch_review_resource(review_name) if review_name else {}
+    except Exception as e:
+        # Transport/auth failure — keep the delivery retryable (Pub/Sub redelivers)
+        # rather than persisting an empty review and marking it done.
+        logger.error("inbound_review: review fetch failed for %s: %s", review_name, e)
+        raise HTTPException(status_code=502, detail="Failed to fetch review resource")
+
+    if not review:
+        # Could not obtain the review resource (no client / no resource name).
+        # Do not persist an empty payload as done — 502 keeps it retryable.
+        logger.warning("inbound_review: empty review resource for %s", review_name)
+        raise HTTPException(status_code=502, detail="Empty review resource")
+
+    payload = dict(review)
     payload.setdefault("name", review.get("name") or review_name)
     if notification.get("notificationType"):
         payload["notificationType"] = notification["notificationType"]
@@ -266,11 +340,15 @@ async def process_review(payload: dict):
             voice_sample=voice
         )
     except ImportError:
+        # Claude not yet wired up — a genuine "skip", not a failure. Returning
+        # normally lets the inbound task mark the event done.
         logger.warning("claude.py not yet implemented — skipping draft generation")
         return
     except Exception as e:
+        # A real Claude API/transport failure MUST propagate so the durable
+        # inbound task retries and eventually dead-letters — never marks done.
         logger.error(f"Claude draft generation failed: {e}")
-        return
+        raise
 
     review_id = name.split("/")[-1] if name else ""
     db = get_db()

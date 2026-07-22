@@ -38,11 +38,12 @@ async def test_record_dead_letter_swallows_db_error():
 def test_should_dead_letter_only_on_final_try():
     import task_queue
 
-    assert task_queue._should_dead_letter({"job_try": 5, "max_tries": 5}) is True
-    assert task_queue._should_dead_letter({"job_try": 6, "max_tries": 5}) is True
-    assert task_queue._should_dead_letter({"job_try": 2, "max_tries": 5}) is False
-    # defaults to MAX_TRIES when max_tries missing
+    assert task_queue._should_dead_letter({"job_try": 5}) is True
+    assert task_queue._should_dead_letter({"job_try": 6}) is True
+    assert task_queue._should_dead_letter({"job_try": 2}) is False
+    # defaults to MAX_TRIES for the cap (max_tries is NOT in the arq ctx)
     assert task_queue._should_dead_letter({"job_try": task_queue.MAX_TRIES}) is True
+    assert task_queue._should_dead_letter({"job_try": task_queue.MAX_TRIES - 1}) is False
 
 
 @pytest.mark.asyncio
@@ -53,6 +54,10 @@ async def test_inbound_task_dead_letters_on_final_try():
     db = MagicMock()
     db.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = MagicMock(
         data={"id": "evt-1", "status": "pending", "attempts": 4, "payload": {"foo": "bar"}}
+    )
+    # atomic claim succeeds
+    db.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[{"id": "evt-1"}]
     )
 
     async def failing_dispatch(event):
@@ -65,7 +70,7 @@ async def test_inbound_task_dead_letters_on_final_try():
             return None
         mock_dl.side_effect = _dl
 
-        ctx = {"job_try": 5, "max_tries": 5}
+        ctx = {"job_try": task_queue.MAX_TRIES}
         with pytest.raises(ValueError):
             await task_queue._process_inbound(ctx, "evt-1", "stripe", failing_dispatch)
 

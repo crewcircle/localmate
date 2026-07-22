@@ -4,10 +4,19 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import pytest
 
 
-def _mock_db(rows):
+def _mock_db(rows, recovered_rows=None):
+    """Mock supabase client.
+
+    ``rows`` — pending rows returned by select().eq().lt().execute().
+    ``recovered_rows`` — rows returned by the stale-processing recovery update
+    (update().eq().lt().execute()).
+    """
     db = MagicMock()
     db.table.return_value.select.return_value.eq.return_value.lt.return_value.execute.return_value = MagicMock(
         data=rows
+    )
+    db.table.return_value.update.return_value.eq.return_value.lt.return_value.execute.return_value = MagicMock(
+        data=recovered_rows or []
     )
     return db
 
@@ -23,16 +32,39 @@ async def test_reconcile_reenqueues_stale_pending_rows():
     ]
     db = _mock_db(rows)
     pool = MagicMock()
-    pool.enqueue_job = AsyncMock()
+    pool.enqueue_job = AsyncMock(return_value=MagicMock())  # non-None → counted
 
     with patch("utils.reconcile.get_db", return_value=db):
         result = await reconcile.reconcile_pending_webhooks(pool)
 
     assert result["reenqueued"] == 3
-    enqueued = [c[0] for c in pool.enqueue_job.call_args_list]
-    assert ("process_stripe_event", "e1") in enqueued
-    assert ("process_gbp_review", "e2") in enqueued
-    assert ("process_menu_update", "e3") in enqueued
+    # deterministic _job_id passed so a duplicate enqueue is dropped by arq
+    calls = pool.enqueue_job.call_args_list
+    by_task = {c[0]: c[1].get("_job_id") for c in calls}
+    assert ("process_stripe_event", "e1") in by_task
+    assert by_task[("process_stripe_event", "e1")] == "process-webhook-e1"
+    assert ("process_gbp_review", "e2") in by_task
+    assert ("process_menu_update", "e3") in by_task
+
+
+@pytest.mark.asyncio
+async def test_reconcile_recovers_stale_processing_rows():
+    from utils import reconcile
+
+    # one row recovered from 'processing', then re-enqueued as pending
+    db = _mock_db([{"id": "e1", "provider": "stripe"}], recovered_rows=[{"id": "e1"}])
+    pool = MagicMock()
+    pool.enqueue_job = AsyncMock(return_value=MagicMock())
+
+    with patch("utils.reconcile.get_db", return_value=db):
+        result = await reconcile.reconcile_pending_webhooks(pool)
+
+    assert result["recovered"] == 1
+    assert result["reenqueued"] == 1
+    # the recovery update reset processing → pending
+    upd_arg = db.table.return_value.update.call_args[0][0]
+    assert upd_arg["status"] == "pending"
+    db.table.return_value.update.return_value.eq.assert_called_with("status", "processing")
 
 
 @pytest.mark.asyncio
@@ -66,7 +98,7 @@ async def test_reconcile_creates_own_pool_when_none_given():
 
     db = _mock_db([{"id": "e1", "provider": "stripe"}])
     pool = MagicMock()
-    pool.enqueue_job = AsyncMock()
+    pool.enqueue_job = AsyncMock(return_value=MagicMock())
     pool.close = AsyncMock()
 
     with patch("utils.reconcile.get_db", return_value=db), \
@@ -85,7 +117,7 @@ async def test_reconcile_query_filters_pending_and_stale():
     with patch("utils.reconcile.get_db", return_value=db):
         await reconcile.reconcile_pending_webhooks(MagicMock())
 
-    # asserts the query chain used status='pending' and a created_at cutoff
+    # asserts the pending query chain used status='pending' and a created_at cutoff
     db.table.return_value.select.return_value.eq.assert_called_with("status", "pending")
     db.table.return_value.select.return_value.eq.return_value.lt.assert_called_once()
     lt_args = db.table.return_value.select.return_value.eq.return_value.lt.call_args[0]
