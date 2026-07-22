@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     square_environment:        str = "sandbox"
     supabase_jwt_secret:       str = ""
 
+    # --- Phase 2: clinical adapter global fallbacks (per-client columns are primary) ---
+    nookal_api_key:            str = ""
+    halaxy_client_id:          str = ""
+    halaxy_client_secret:      str = ""
+    halaxy_environment:        str = "au"   # "au" | "eu"
+
     # --- Phase 0: queue / worker / billing-portal infra ---
     redis_url:                 str = "redis://localhost:6379/0"
     worker_role:               str = "web"   # "web" | "worker" | "scheduler"
