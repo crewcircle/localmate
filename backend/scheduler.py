@@ -1,55 +1,63 @@
+"""Enqueue-only scheduler (Phase 0).
+
+Runs ONLY in the dedicated ``scheduler``-role container (single-active — NOT
+HA/leader-election; see C4). Each cron trigger enqueues an arq job on the shared
+Redis pool rather than executing business logic in-process. The worker container
+executes the enqueued jobs. This container must be single-instance so cron jobs
+fire exactly once (no duplicate fire); no advisory lock is used (that is D8-B).
+
+NOTE: the mandatory 5-minute webhook reconciliation (C4) is NOT scheduled here —
+it is registered as an arq ``cron_job`` in ``task_queue.WorkerSettings`` and runs
+on the worker. Scheduling it in both places would double-fire reconciliation and
+enqueue duplicate processing jobs, so there is exactly ONE reconcile trigger.
+"""
+import logging
+
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
-import logging
 
 logger = logging.getLogger(__name__)
 AEST = pytz.timezone("Australia/Sydney")
 
+# APScheduler job id -> arq task name. Job ids are unchanged from the pre-queue
+# scheduler so existing operational docs/monitoring keep working.
+CRON_JOBS = [
+    # (job_id, arq_task_name, CronTrigger)
+    ("yelp_poll", "run_yelp_poll", CronTrigger(hour=0)),
+    ("seo_weekly", "run_seo_weekly", CronTrigger(day_of_week="mon", hour=6)),
+    ("competitor_weekly", "run_competitor_weekly", CronTrigger(day_of_week="sun", hour=22)),
+    ("appointment_daily", "run_appointment_daily", CronTrigger(hour=8)),
+    ("trial_hourly", "run_trial_hourly", CronTrigger(minute=0)),
+    ("trial_emails_daily", "run_trial_emails_daily", CronTrigger(hour=9)),
+    # Reconciliation is NOT scheduled here — it is an arq cron on the worker
+    # (task_queue.WorkerSettings.cron_jobs) so it fires from exactly one place.
+]
+
+
+def _make_enqueue(task_name: str):
+    """Return an async APScheduler action that enqueues ``task_name`` on arq."""
+
+    async def _enqueue() -> None:
+        from task_queue import get_arq_pool
+
+        pool = await get_arq_pool()
+        try:
+            await pool.enqueue_job(task_name)
+            logger.info("scheduler enqueued arq task %s", task_name)
+        finally:
+            try:
+                await pool.close()
+            except Exception:
+                pass
+
+    return _enqueue
+
 
 def create_scheduler() -> AsyncIOScheduler:
+    """Build the enqueue-only scheduler. Every job pushes an arq job; the
+    scheduler process never runs business logic itself."""
     scheduler = AsyncIOScheduler(timezone=AEST)
-
-    # Yelp polling — daily at midnight (added in Phase 3)
-    try:
-        from jobs.review_poll import poll_yelp_reviews_all_clients
-        scheduler.add_job(poll_yelp_reviews_all_clients, CronTrigger(hour=0), id="yelp_poll")
-    except ImportError:
-        logger.warning("yelp_poll job not yet implemented — skipping")
-
-    # SEO monitoring — Monday 6am AEST (added in Phase 4)
-    try:
-        from jobs.seo_report import run_seo_rankings_all_clients
-        scheduler.add_job(run_seo_rankings_all_clients, CronTrigger(day_of_week="mon", hour=6), id="seo_weekly")
-    except ImportError:
-        logger.warning("seo_weekly job not yet implemented — skipping")
-
-    # Competitor snapshot — Sunday 10pm AEST (added in Phase 5)
-    try:
-        from jobs.competitor_watch import run_competitor_snapshots_all_clients
-        scheduler.add_job(run_competitor_snapshots_all_clients, CronTrigger(day_of_week="sun", hour=22), id="competitor_weekly")
-    except ImportError:
-        logger.warning("competitor_weekly job not yet implemented — skipping")
-
-    # Appointment follow-up — daily 8am AEST (added in Phase 6)
-    try:
-        from jobs.appointment_followup import run_appointment_followup_all_clients
-        scheduler.add_job(run_appointment_followup_all_clients, CronTrigger(hour=8), id="appointment_daily")
-    except ImportError:
-        logger.warning("appointment_daily job not yet implemented — skipping")
-
-    # Check trial expiries — hourly (added in Phase 2)
-    try:
-        from middleware.trial_gate import check_trial_expiries
-        scheduler.add_job(check_trial_expiries, CronTrigger(minute=0), id="trial_hourly")
-    except ImportError:
-        logger.warning("trial_hourly job not yet implemented — skipping")
-
-    # Trial email sequence (Day 1/7/13) — daily 9am AEST (added in Round 1E)
-    try:
-        from jobs.trial_emails import run_trial_emails
-        scheduler.add_job(run_trial_emails, CronTrigger(hour=9), id="trial_emails_daily")
-    except ImportError:
-        logger.warning("trial_emails_daily job not yet implemented — skipping")
-
+    for job_id, task_name, trigger in CRON_JOBS:
+        scheduler.add_job(_make_enqueue(task_name), trigger, id=job_id)
     return scheduler

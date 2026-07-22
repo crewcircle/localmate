@@ -22,7 +22,7 @@ create policy "service_role_all" on drafts
 -- Trial users can create drafts but have read-only access to existing ones
 create policy "trial_read_only_drafts" on drafts
   for insert
-  using (
+  with check (
     exists (select 1 from clients c where c.id = drafts.client_id
       and (c.subscription_status = 'active'
            or (c.trial_status = 'active' and c.trial_ends_at > now())))

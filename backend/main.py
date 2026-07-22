@@ -23,11 +23,38 @@ if settings.sentry_dsn:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    scheduler = create_scheduler()
-    scheduler.start()
-    app.state.scheduler = scheduler
+    app.state.scheduler = None
+    app.state.arq = None
+
+    from task_queue import get_arq_pool
+
+    log = logging.getLogger(__name__)
+    if settings.worker_role == "scheduler":
+        # Dedicated single-active scheduler container: enqueue-only APScheduler
+        # + an arq pool to push jobs. NOT HA — must be a single instance (C4).
+        app.state.arq = await get_arq_pool()
+        scheduler = create_scheduler()
+        scheduler.start()
+        app.state.scheduler = scheduler
+        log.info("Started enqueue-only scheduler (role=scheduler)")
+    else:
+        # web role: create an arq pool for enqueuing from request handlers.
+        # Do NOT start APScheduler here (prevents duplicate cron fire across
+        # web replicas). The 'worker' role runs via the arq CLI, not uvicorn.
+        try:
+            app.state.arq = await get_arq_pool()
+        except Exception as e:
+            log.warning("arq pool init failed (web role): %s", e)
+
     yield
-    scheduler.shutdown()
+
+    if app.state.scheduler is not None:
+        app.state.scheduler.shutdown()
+    if app.state.arq is not None:
+        try:
+            await app.state.arq.close()
+        except Exception:
+            pass
 
 
 app = FastAPI(title="LocalMate", lifespan=lifespan)

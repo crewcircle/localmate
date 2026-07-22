@@ -22,7 +22,15 @@ COPY . .
 #   DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD
 #   GBP_CLIENT_ID, GBP_CLIENT_SECRET
 #   BASE_DOMAIN, PROJECT_ID
+#   REDIS_URL                (arq broker; e.g. redis://localmate-redis:6379/0)
+#   WORKER_ROLE              (web|worker|scheduler; set per-container in compose)
+#   STRIPE_PORTAL_CONFIG_ID  (optional; Stripe billing portal config bpc_...)
+#   DASHBOARD_URL            (optional; portal return_url base)
 #   SENTRY_DSN (optional)
+#
+# Run modes (same image, different command):
+#   web / scheduler : uv run uvicorn main:app --host 0.0.0.0 --port 8000
+#   worker          : uv run arq worker.WorkerSettings
 
 EXPOSE 8000
 

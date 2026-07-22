@@ -22,6 +22,10 @@ _STUB_ENV = {
     "ENVIRONMENT": "test",
     "ENCRYPTION_KEY": "",
     "SUPABASE_JWT_SECRET": "",
+    "REDIS_URL": "redis://localhost:6379/0",
+    "WORKER_ROLE": "web",
+    "STRIPE_PORTAL_CONFIG_ID": "",
+    "DASHBOARD_URL": "https://localmate.crewcircle.co",
 }
 for _k, _v in _STUB_ENV.items():
     os.environ.setdefault(_k, _v)

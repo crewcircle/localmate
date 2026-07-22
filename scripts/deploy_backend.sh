@@ -30,8 +30,11 @@ REQUIRED_VARS=(SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY
                YELP_API_KEY
                ENCRYPTION_KEY SUPABASE_JWT_SECRET
                SQUARE_ACCESS_TOKEN SQUARE_ENVIRONMENT
+               REDIS_URL
                BASE_DOMAIN PROJECT_ID)
 # SENTRY_DSN is optional — backend skips Sentry init when empty.
+# STRIPE_PORTAL_CONFIG_ID and DASHBOARD_URL are optional (Phase 1 billing portal);
+# WORKER_ROLE is set per-container in docker-compose.yml, not here.
 for var in "${REQUIRED_VARS[@]}"; do
   if [ -z "${!var:-}" ]; then
     echo "Missing $var - run via: doppler run --project localmate --config prd -- bash scripts/deploy_backend.sh"
@@ -82,6 +85,9 @@ ENCRYPTION_KEY=$ENCRYPTION_KEY
 SUPABASE_JWT_SECRET=$SUPABASE_JWT_SECRET
 SQUARE_ACCESS_TOKEN=$SQUARE_ACCESS_TOKEN
 SQUARE_ENVIRONMENT=$SQUARE_ENVIRONMENT
+REDIS_URL=$REDIS_URL
+STRIPE_PORTAL_CONFIG_ID=${STRIPE_PORTAL_CONFIG_ID:-}
+DASHBOARD_URL=${DASHBOARD_URL:-}
 BASE_DOMAIN=$BASE_DOMAIN
 PROJECT_ID=$PROJECT_ID
 ENVIRONMENT=production
@@ -94,7 +100,7 @@ rsync -az --delete \
   "$REPO_ROOT/backend/" "root@$DROPLET_IP:/opt/localmate/backend/"
 rsync -az "$REPO_ROOT/deploy/" "root@$DROPLET_IP:/opt/localmate/deploy/"
 
-echo "=== 4/5 Building and starting backend (joins existing Caddy network) ==="
+echo "=== 4/5 Building and starting backend + redis + worker + scheduler ==="
 ssh "root@$DROPLET_IP" bash -s << 'REMOTE'
 set -e
 cd /opt/localmate/deploy
@@ -104,6 +110,13 @@ docker network inspect deploy_default >/dev/null 2>&1 || docker network create d
 docker compose up -d --build
 sleep 10
 docker compose ps
+# Verify Redis is up and the arq worker connected.
+echo "--- redis ping ---"
+docker exec localmate-redis redis-cli ping || echo "WARN: redis ping failed"
+echo "--- worker logs (arq should report 'starting worker') ---"
+docker logs --tail 20 localmate-worker 2>&1 || echo "WARN: worker container not running"
+echo "--- scheduler logs ---"
+docker logs --tail 10 localmate-scheduler 2>&1 || echo "WARN: scheduler container not running"
 REMOTE
 
 echo "=== 5/5 Wiring localmate into TaxFlowAI's Caddyfile and hot-reloading ==="

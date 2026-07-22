@@ -10,12 +10,60 @@ Target domain: **localmate.crewcircle.co** (dashboard) / **api.localmate.crewcir
 | Layer | Host | Domain | Trigger |
 |---|---|---|---|
 | Next.js dashboard | **Vercel** | `localmate.crewcircle.co` | GitHub Actions `deploy.yml` on push to `main` |
-| FastAPI + APScheduler | **Docker Compose + Caddy** on shared DigitalOcean Sydney droplet (`170.64.183.45`) | `api.localmate.crewcircle.co` | `scripts/deploy_backend.sh` via Doppler |
+| FastAPI (web) + arq worker + scheduler + Redis | **Docker Compose + Caddy** on shared DigitalOcean Sydney droplet (`170.64.183.45`) | `api.localmate.crewcircle.co` | `scripts/deploy_backend.sh` via Doppler |
 | Postgres | **Supabase** | `*.supabase.co` | Pulumi provisioner |
 | Secrets | **Doppler** `localmate/prd` (inherits `crewcircle-master/prod`) | — | Doppler CLI |
 | DNS | **Cloudflare** | `crewcircle.co` zone | `scripts/finish_infra.sh` via Doppler |
 
 The backend shares the same droplet as **TaxFlowAI** — Caddy routes `api.localmate.crewcircle.co` to the localmate backend container and `api.taxflow.crewcircle.com.au` to the taxflow backend container. No new droplet needed.
+
+### Task queue containers (Phase 0)
+
+The backend image runs in three roles, all from `deploy/docker-compose.yml`:
+
+| Container | `WORKER_ROLE` | Command | Purpose |
+|---|---|---|---|
+| `localmate-backend` | `web` | `uvicorn main:app` | FastAPI API; enqueues jobs onto arq. Does **not** run APScheduler. |
+| `localmate-worker` | `worker` | `arq worker.WorkerSettings` | Executes queued tasks (inbound webhook processing + durable outbound sends). Scale with `docker compose up -d --scale localmate-worker=N`. |
+| `localmate-scheduler` | `scheduler` | `uvicorn main:app` | **Single-active** enqueue-only APScheduler (NOT HA). Each cron trigger pushes an arq job. Must remain a single instance so crons fire exactly once. |
+| `localmate-redis` | — | `redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy noeviction` | arq broker/result store. Persistent (AOF), non-evicting, memory-capped (128MB) on the shared 1GB droplet. Named volume `localmate-redis-data`. |
+
+**Durability:** inbound webhooks (Stripe/GBP/menu) are persisted to `webhook_events` before enqueue; a reconciliation job (`reconcile_webhooks`, every 5 min) re-enqueues rows stuck `pending`. Exhausted retries (inbound and outbound) land in `dead_letter`. Redis is non-evicting so job state is never silently dropped.
+
+### New Doppler vars (`localmate/prd`)
+
+- `REDIS_URL` — `redis://localmate-redis:6379/0` (compose service DNS name). **Required.**
+- `WORKER_ROLE` — set per-container in `docker-compose.yml` (`web`/`worker`/`scheduler`); no need to set in Doppler.
+- `STRIPE_PORTAL_CONFIG_ID` — optional `bpc_...`; empty uses the Stripe dashboard default portal config. Used by the Phase 1 billing portal endpoint. Create the portal configuration in Stripe (enable subscription update to the localmate price, payment-method update, cancellation) — one-time dashboard/API step.
+- `DASHBOARD_URL` — `https://localmate.crewcircle.co`; used as the Stripe portal `return_url` base.
+
+### Migrations (Phase 0)
+
+Apply `supabase/migrations/010_webhook_events.sql`, `011_dead_letter.sql`, `012_booking_credentials.sql` on top of `009`. Each new table has RLS enabled with a `service_role_all` policy (matches `001_clients.sql`). The sequence applies cleanly on top of `009` and is reversible (drop the two new tables / the added `clients` columns).
+
+### Rollback (queue)
+
+`docker compose stop localmate-worker localmate-scheduler localmate-redis` reverts to web-only. Inbound webhooks still persist to `webhook_events` as `pending` (nothing crashes); processing resumes when the worker + Redis come back and the reconciler re-enqueues the backlog.
+
+### Phase 0 staged integration gate (C10 — MUST PASS before merge)
+
+Unit tests mock Redis/Postgres, which cannot prove the durability behaviour. Before the Phase 0 PR merges to prod, run the executable gate — it spins up throwaway `postgres:15-alpine` + `redis:7-alpine` containers and **exits non-zero on any failed acceptance check** (nothing to eyeball):
+
+```bash
+bash scripts/phase0_staging_gate.sh
+```
+
+It asserts, and FAILS the build otherwise:
+
+1. **Migrations** — Phase 0 migrations `010`/`011`/`012` apply cleanly on the reconstructed baseline; `webhook_events` + `dead_letter` exist with a `service_role_all` RLS policy; `012` added the five booking-credential columns on `clients`. (A pre-existing baseline-migration quirk already live in prod is a warning, not a Phase 0 failure.)
+2. **Worker drain / restart** — an enqueued inbound job is drained by a real arq worker to `status='done'`.
+3. **Retry + dead-letter** — a permanently-failing job is retried up to `MAX_TRIES` (real `arq.Retry` semantics) and then lands as exactly one `dead_letter` row.
+4. **Reconciliation** — a stale `pending` row is re-enqueued and a stale `processing` lease is reset to `pending` and re-enqueued.
+5. **Exactly-once / dedupe** — enqueuing the same event twice with the deterministic `_job_id` yields a single job (arq drops the duplicate).
+6. **Redis durability (D9-A)** — the gate refuses to pass unless Redis is `noeviction` + AOF, so job state is never silently dropped.
+
+Record the gate's `ALL PHASE 0 STAGING GATE CHECKS PASSED` output on the PR before merge.
+
 
 ---
 

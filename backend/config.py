@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     square_environment:        str = "sandbox"
     supabase_jwt_secret:       str = ""
 
+    # --- Phase 0: queue / worker / billing-portal infra ---
+    redis_url:                 str = "redis://localhost:6379/0"
+    worker_role:               str = "web"   # "web" | "worker" | "scheduler"
+    dashboard_url:             str = ""       # Stripe portal return_url base
+    stripe_portal_config_id:   str = ""       # Stripe portal configuration id (bpc_...)
+
     class Config:
         env_file = ".env.local"
         env_file_encoding = "utf-8"
