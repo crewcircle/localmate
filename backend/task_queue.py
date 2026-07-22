@@ -436,6 +436,63 @@ async def dataforseo_task(ctx: dict, keyword: str, location: str, client_suburb:
     )
 
 
+async def dataforseo_maps_task(
+    ctx: dict, keyword: str, location: str, client_suburb: str = "",
+    business_name: str = "", place_id: str = "",
+) -> Any:
+    """Durable DataForSEO Maps/Local-Pack query (Phase 4: jobs/seo_report.py).
+
+    Uses the *strict* variant so transport/API failures are retried and
+    dead-lettered. A genuine "not matched in the local pack" returns
+    ``map_position: None`` normally.
+    """
+    from services.dataforseo import get_maps_rankings_strict
+
+    return await _run_outbound(
+        ctx, "dataforseo", keyword,
+        {"keyword": keyword, "location": location, "client_suburb": client_suburb,
+         "business_name": business_name, "place_id": place_id},
+        lambda: get_maps_rankings_strict(
+            keyword, location, client_suburb, business_name, place_id
+        ),
+    )
+
+
+async def provision_gbp_notifications_task(ctx: dict, client_id: str) -> Any:
+    """Durable GBP notification provisioning task (Phase 4, C4).
+
+    Enqueued from ``routers/auth.py::gbp_callback`` after tokens are stored.
+    ``provision_gbp_notifications`` returns a status dict (does not raise), so
+    this wrapper inspects the status: ``failed`` triggers retry/dead-letter,
+    ``active`` (or any other) is returned as success.
+
+    Only ``client_id`` is enqueued — the GCP SA key and GBP access token are
+    loaded/decrypted inside the worker, never serialized into Redis.
+    """
+    from services.gbp_provisioning import provision_gbp_notifications
+
+    job_try = int(ctx.get("job_try", 1))
+
+    try:
+        result = await provision_gbp_notifications(client_id)
+    except Exception as e:
+        if _should_dead_letter(ctx):
+            await record_dead_letter("gbp_provisioning", client_id, {"client_id": client_id}, str(e), job_try)
+            raise
+        logger.warning("GBP provisioning try %d failed: %s — retrying", job_try, e)
+        raise Retry(defer=_retry_defer(job_try))
+
+    if isinstance(result, dict) and result.get("status") == "failed":
+        error = result.get("error", "provisioning failed")
+        if _should_dead_letter(ctx):
+            await record_dead_letter("gbp_provisioning", client_id, {"client_id": client_id}, error, job_try)
+            raise RuntimeError(f"GBP provisioning failed: {error}")
+        logger.warning("GBP provisioning try %d failed: %s — retrying", job_try, error)
+        raise Retry(defer=_retry_defer(job_try))
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Cron entrypoint tasks (enqueued by the scheduler container; see scheduler.py)
 # ---------------------------------------------------------------------------
@@ -509,6 +566,8 @@ FUNCTIONS = [
     post_gbp_reply_task,
     square_sync_task,
     dataforseo_task,
+    dataforseo_maps_task,
+    provision_gbp_notifications_task,
     # cron entrypoints
     run_yelp_poll,
     run_seo_weekly,

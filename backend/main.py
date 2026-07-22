@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db import init_db
 from scheduler import create_scheduler
-from routers import auth, webhooks, drafts, locations, menu
+from routers import auth, webhooks, drafts, locations, menu, seo
 
 logging.basicConfig(level=logging.INFO)
 
@@ -82,6 +82,8 @@ try:
     app.include_router(approve.router, prefix="/approve")
 except ImportError:
     pass
+
+app.include_router(seo.router)
 
 
 @app.get("/health")

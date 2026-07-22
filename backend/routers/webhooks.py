@@ -382,12 +382,12 @@ async def process_review(payload: dict):
 
 
 def _extract_gbp_location_id(gbp_name: str) -> str | None:
-    """Extract the locationId from a GBP resource name.
+    """Extract the location id from a GBP resource name.
 
-    Handles ``accounts/{a}/locations/{loc}/reviews/{r}`` (and similar shapes)
-    by returning the segment immediately after ``locations``.
+    Handles ``accounts/{accountId}/locations/{locationId}/reviews/{reviewId}``
+    and any other path containing a ``locations/{id}`` segment.
     """
-    parts = (gbp_name or "").split("/")
+    parts = gbp_name.split("/")
     for i, part in enumerate(parts):
         if part == "locations" and i + 1 < len(parts):
             return parts[i + 1]
@@ -448,17 +448,14 @@ def _build_menu_item(payload: dict) -> dict:
     return item
 
 
-async def _persist_menu_update(
-    request: Request, client_id: str, location_id: str | None, payload: dict
-) -> dict:
-    """Build a canonical item, dedupe-persist, and enqueue a Sheets menu-update.
-
-    The idempotency key is derived from ``client_id`` (+ ``location_id`` when
-    present), the item name, and a minute bucket, so a re-delivery is deduped.
-    """
+@router.post("/menu-update/{client_id}/{location_id}")
+async def menu_update_location(
+    client_id: str, location_id: str, payload: dict, request: Request
+):
+    """Persist + enqueue a Google Sheets menu change for a specific location."""
     item = _build_menu_item(payload)
     bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
-    raw = ":".join(p for p in [client_id, location_id, item["name"], bucket] if p)
+    raw = f"{client_id}:{location_id}:{item['name']}:{bucket}"
     idempotency_key = hashlib.sha256(raw.encode()).hexdigest()
 
     result = _persist_event(
@@ -472,18 +469,27 @@ async def _persist_menu_update(
     return {"status": "received"}
 
 
-@router.post("/menu-update/{client_id}/{location_id}")
-async def menu_update_location(
-    client_id: str, location_id: str, payload: dict, request: Request
-):
-    """Persist + enqueue a Google Sheets menu change for a specific location."""
-    return await _persist_menu_update(request, client_id, location_id, payload)
-
-
 @router.post("/menu-update/{client_id}")
 async def menu_update(client_id: str, payload: dict, request: Request):
-    """Persist + enqueue a Google Sheets menu change (compat: resolves default location)."""
-    return await _persist_menu_update(request, client_id, None, payload)
+    """Persist + enqueue a Google Sheets menu change (compat: resolves default location).
+
+    item = {name, price_cents=int(float(price)*100), description, category, active}.
+    """
+    item = _build_menu_item(payload)
+    bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
+    raw = f"{client_id}:{item['name']}:{bucket}"
+    idempotency_key = hashlib.sha256(raw.encode()).hexdigest()
+
+    # location_id=None — process_menu_update resolves the default location
+    result = _persist_event(
+        "menu", idempotency_key, "menu-update",
+        {"client_id": client_id, "location_id": None, "item": item, "origin": "sheets"},
+    )
+    if result["status"] == "duplicate":
+        return {"status": "duplicate"}
+
+    await _enqueue(request, "process_menu_update", result["event_id"])
+    return {"status": "received"}
 
 
 # ---------------------------------------------------------------------------

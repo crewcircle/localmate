@@ -95,11 +95,12 @@ async def upsert_canonical(
 # ---------------------------------------------------------------------------
 
 async def _retry_push(label: str, coro_fn):
-    """Run ``coro_fn()`` with bounded retry; return its result or a failure dict.
+    """Run an outbound push with a small 5xx-retry loop.
 
-    Retries on a 5xx ``HTTPStatusError`` (or any other exception) up to
-    ``RETRY_MAX_ATTEMPTS``. Non-retryable HTTP errors and exhausted retries
-    return ``{"synced": False, "message": ...}`` with the platform ``label``.
+    ``coro_fn`` is a zero-arg async callable that performs the actual HTTP
+    call and returns the success dict on success (raising on failure).
+    Retries up to ``RETRY_MAX_ATTEMPTS`` on 5xx or generic exceptions,
+    sleeping ``RETRY_DELAY_SECONDS`` between attempts.
     """
     for attempt in range(RETRY_MAX_ATTEMPTS):
         try:
@@ -114,6 +115,7 @@ async def _retry_push(label: str, coro_fn):
                 await asyncio.sleep(RETRY_DELAY_SECONDS)
                 continue
             return {"synced": False, "message": f"{label} sync error: {exc}"}
+
     return {"synced": False, "message": f"{label} sync failed after retries"}
 
 
@@ -136,7 +138,7 @@ async def _push_to_square(
     external_id = link.get("external_id") if link else None
     external_version = link.get("external_version") if link else None
 
-    async def _do() -> dict:
+    async def _do():
         result = await square_upsert(
             access_token,
             square_location_id,
@@ -178,7 +180,7 @@ async def _push_to_gbp(
         "currency": "AUD",
     }
 
-    async def _do() -> dict:
+    async def _do():
         async with httpx.AsyncClient() as http:
             resp = await http.post(
                 url,
