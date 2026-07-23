@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   Mail,
   Search,
@@ -12,7 +13,6 @@ import {
   ChevronRight,
 } from "lucide-react";
 import DualRankingTable from "@/components/DualRankingTable";
-import { toast } from "sonner";
 import { stubDualRankings, stubCompetitorChanges } from "@/lib/stubs";
 import type { StructuredDiff } from "@/lib/stubs";
 import { dualRankingStats } from "@/lib/stats";
@@ -54,7 +54,7 @@ const legendItems: {
   { type: "hours", label: "Hours change", pillClass: "bg-chart-3/10 text-chart-3" },
 ];
 
-export default function ReportsPage() {
+export default function GrowthPage() {
   const [tab, setTab] = useState<"seo" | "competitors">("seo");
 
   const rankingStats = dualRankingStats(stubDualRankings);
@@ -92,9 +92,10 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-6">
+      {/* Page header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Reports</h1>
+          <h1 className="text-xl font-semibold text-foreground">Growth</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             SEO rankings and competitor intelligence
           </p>
@@ -109,10 +110,11 @@ export default function ReportsPage() {
         </div>
       </div>
 
+      {/* Tabs */}
       <div className="flex gap-4 border-b border-border">
         <button
           onClick={() => setTab("seo")}
-          className={`pb-2 text-sm font-medium ${
+          className={`pb-2 text-sm font-medium transition-colors ${
             tab === "seo"
               ? "border-b-2 border-accent text-accent"
               : "text-muted-foreground hover:text-foreground"
@@ -122,7 +124,7 @@ export default function ReportsPage() {
         </button>
         <button
           onClick={() => setTab("competitors")}
-          className={`pb-2 text-sm font-medium ${
+          className={`pb-2 text-sm font-medium transition-colors ${
             tab === "competitors"
               ? "border-b-2 border-accent text-accent"
               : "text-muted-foreground hover:text-foreground"
@@ -134,13 +136,14 @@ export default function ReportsPage() {
 
       {tab === "seo" ? (
         <>
+          {/* Stat cards */}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {seoStats.map((stat) => {
               const Icon = stat.icon;
               return (
                 <div
                   key={stat.label}
-                  className="rounded-lg border border-border bg-background p-4"
+                  className="rounded-xl ring-1 ring-foreground/10 bg-background p-4"
                 >
                   <div className="flex items-center gap-3">
                     <span
@@ -149,10 +152,10 @@ export default function ReportsPage() {
                       <Icon className="h-4 w-4" />
                     </span>
                     <div>
-                      <p className="text-2xl font-bold text-foreground">
+                      <p className="text-2xl font-semibold tabular-nums text-foreground">
                         {stat.value}
                       </p>
-                      <p className="text-xs font-medium text-muted-foreground">
+                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         {stat.label}
                       </p>
                     </div>
@@ -162,7 +165,8 @@ export default function ReportsPage() {
             })}
           </div>
 
-          <div className="rounded-lg border border-border bg-background p-6">
+          {/* Rankings table */}
+          <div className="rounded-xl ring-1 ring-foreground/10 bg-background p-6">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-foreground">
                 Keyword Rankings
@@ -176,7 +180,8 @@ export default function ReportsPage() {
         </>
       ) : (
         <>
-          <div className="rounded-lg border border-border bg-background p-4">
+          {/* Legend */}
+          <div className="rounded-xl ring-1 ring-foreground/10 bg-background p-4">
             <div className="flex flex-wrap items-center gap-4">
               {legendItems.map((item) => {
                 const Icon = diffTypeMeta[item.type].icon;
@@ -201,11 +206,12 @@ export default function ReportsPage() {
             </div>
           </div>
 
+          {/* Competitor cards */}
           <div className="grid gap-4 lg:grid-cols-2">
             {stubCompetitorChanges.map((competitor) => (
               <div
                 key={competitor.domain}
-                className="overflow-hidden rounded-lg border border-border bg-background"
+                className="overflow-hidden rounded-xl ring-1 ring-foreground/10 bg-background"
               >
                 <div className="border-b border-border p-4">
                   <div className="flex items-center justify-between">

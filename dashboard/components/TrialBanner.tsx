@@ -9,8 +9,11 @@ import { api } from "@/lib/api";
 import { stubBillingUsage } from "@/lib/stubs";
 import type { BillingUsage, PlanInfo } from "@/lib/stubs";
 import { getCap, REVIEW_DRAFTS } from "@/lib/usage";
-import DemoBadge from "./DemoBadge";
+import { toast } from "sonner";
 
+/* NOTE: TrialBanner is currently unused — DashboardShell renders DemoHeader instead.
+   When non-demo mode is needed, DashboardShell should check NEXT_PUBLIC_DEMO_MODE
+   and conditionally render this vs DemoHeader. */
 interface TrialBannerProps {
   client?: {
     trial_ends_at: string;
@@ -67,7 +70,6 @@ function UsageBanner({ plan }: { plan: PlanInfo }) {
           >
             Manage billing
           </Link>
-          <DemoBadge />
         </div>
       </div>
     </div>
@@ -125,16 +127,21 @@ export default function TrialBanner({ client: _client }: TrialBannerProps) {
         </div>
         <div className="flex items-center gap-2">
           {(state === "expiring_soon" || state === "card_required") && (
-            <button className="rounded bg-background px-3 py-1 text-sm font-medium shadow-sm border border-border hover:bg-muted">
+            <button
+              onClick={() => toast.info("Stripe billing portal coming soon")}
+              className="rounded bg-background px-3 py-1 text-sm font-medium shadow-sm border border-border hover:bg-muted"
+            >
               {state === "card_required" ? "Add card NOW" : "Add card"}
             </button>
           )}
           {state === "expired" && (
-            <button className="rounded bg-primary px-3 py-1 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+            <button
+              onClick={() => toast.info("Plan upgrades coming soon")}
+              className="rounded bg-primary px-3 py-1 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            >
               Upgrade
             </button>
           )}
-          <DemoBadge />
         </div>
       </div>
     </div>
