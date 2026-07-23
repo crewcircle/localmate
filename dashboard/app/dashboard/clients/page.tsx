@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { toast } from "sonner";
 import { Plus, ExternalLink, X } from "lucide-react";
-import DemoBadge from "@/components/DemoBadge";
 import { api } from "@/lib/api";
 import { stubClients } from "@/lib/stubs";
 import type { Client } from "@/lib/stubs";
@@ -81,21 +81,21 @@ export default function ClientsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Clients</h1>
+          <h1 className="text-xl font-semibold text-foreground">Clients</h1>
           <p className="mt-1 text-sm text-muted-foreground">Manage your client roster</p>
         </div>
         <button
           onClick={() => setShowModal(true)}
-          className="inline-flex items-center gap-1 rounded bg-accent px-3 py-1.5 text-sm font-medium text-accent-foreground hover:bg-accent/90"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-foreground hover:bg-accent/90 transition-colors"
         >
           <Plus className="h-4 w-4" /> Add Client
         </button>
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-border bg-background">
+      <div className="overflow-x-auto rounded-xl ring-1 ring-foreground/10 bg-background">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-border bg-muted text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <tr className="border-b border-border bg-muted text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <th className="px-4 py-3">Business</th>
               <th className="px-4 py-3">Type</th>
               <th className="px-4 py-3">Trial</th>

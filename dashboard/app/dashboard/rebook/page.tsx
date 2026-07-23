@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   Users,
   Clock,
@@ -10,7 +11,6 @@ import {
   Building2,
   ChevronDown,
 } from "lucide-react";
-import DemoBadge from "@/components/DemoBadge";
 import Toggle from "@/components/Toggle";
 import { stubPractitioners } from "@/lib/stubs";
 import type { Practitioner, LapsedPatient } from "@/lib/stubs";
@@ -80,28 +80,26 @@ export default function RebookPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Rebook</h1>
+          <h1 className="text-xl font-semibold text-foreground">Rebook</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Lapsed-patient follow-up by practitioner
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <DemoBadge />
-          <div className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground">
-            <Building2 className="h-4 w-4" />
-            <span>Bondi Dental Clinic</span>
-            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-          </div>
+        <div className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground">
+          <Building2 className="h-4 w-4" />
+          <span>Bondi Dental Clinic</span>
+          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
         </div>
       </div>
 
+      {/* Stat cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {statCards.map((stat, i) => {
           const Icon = stat.icon;
           return (
             <div
               key={stat.label}
-              className="rounded-lg border border-border bg-background p-4"
+              className="rounded-xl ring-1 ring-foreground/10 bg-background p-4"
             >
               <div className="flex items-center gap-3">
                 <span
@@ -110,10 +108,10 @@ export default function RebookPage() {
                   <Icon className="h-4 w-4" />
                 </span>
                 <div>
-                  <p className="text-2xl font-bold text-foreground">
+                  <p className="text-2xl font-semibold tabular-nums text-foreground">
                     {stat.value}
                   </p>
-                  <p className="text-xs font-medium text-muted-foreground">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     {stat.label}
                   </p>
                 </div>
@@ -123,10 +121,11 @@ export default function RebookPage() {
         })}
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-border bg-background">
+      {/* Practitioners table */}
+      <div className="overflow-x-auto rounded-xl ring-1 ring-foreground/10 bg-background">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-border bg-muted text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <tr className="border-b border-border bg-muted text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <th className="px-4 py-3">Practitioner</th>
               <th className="px-4 py-3">Lapsed patients</th>
               <th className="px-4 py-3">Follow-ups sent</th>
@@ -232,7 +231,7 @@ function PractitionerDetail({
   ];
 
   return (
-    <div className="rounded-lg border border-border bg-background p-6">
+    <div className="rounded-xl ring-1 ring-foreground/10 bg-background p-6">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold text-foreground">
@@ -257,22 +256,22 @@ function PractitionerDetail({
         {detailStats.map((stat) => (
           <div
             key={stat.label}
-            className="rounded-lg border border-border p-4"
+            className="rounded-lg ring-1 ring-foreground/10 p-4"
           >
-            <p className={`text-2xl font-bold ${stat.className}`}>
+            <p className={`text-2xl font-semibold tabular-nums ${stat.className}`}>
               {stat.value}
             </p>
-            <p className="text-xs font-medium text-muted-foreground">
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
               {stat.label}
             </p>
           </div>
         ))}
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-border">
+      <div className="overflow-x-auto rounded-lg ring-1 ring-foreground/10">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-border text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <tr className="border-b border-border text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <th className="px-4 py-3">Patient</th>
               <th className="px-4 py-3">Last visit</th>
               <th className="px-4 py-3">Channel</th>

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Star, Trash2, Check, Edit3, Clock } from "lucide-react";
 import { differenceInHours, parseISO } from "date-fns";
-import DemoBadge from "./DemoBadge";
+import { toast } from "sonner";
 import type { DraftReview } from "@/lib/stubs";
 
 interface ReviewCardProps {
@@ -122,7 +122,12 @@ export default function ReviewCard({
             >
               <Trash2 className="h-3 w-3" /> Discard
             </button>
-            <DemoBadge />
+            <button
+              onClick={() => toast.info("Approval coming soon (demo mode)")}
+              className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-accent-foreground hover:bg-accent/90 transition-colors"
+            >
+              Approve
+            </button>
           </div>
         </div>
       </div>
