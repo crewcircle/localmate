@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 import {
   Building2,
   Store,
@@ -13,7 +14,6 @@ import {
   Stethoscope,
   Globe,
 } from "lucide-react";
-import DemoBadge from "@/components/DemoBadge";
 import Toggle from "@/components/Toggle";
 import { stubLocations } from "@/lib/stubs";
 import type { Location } from "@/lib/stubs";
@@ -61,14 +61,30 @@ export default function LocationsPage() {
   };
 
   const statCards = [
-    { label: "Locations", value: stats.total.toString(), icon: Building2 },
+    {
+      label: "Locations",
+      value: stats.total.toString(),
+      icon: Building2,
+      chipClass: "bg-accent/10 text-accent",
+    },
     {
       label: "Menus synced",
       value: `${stats.synced}/${stats.total}`,
       icon: Store,
+      chipClass: "bg-chart-3/10 text-chart-3",
     },
-    { label: "Reviews this week", value: "23", icon: Star },
-    { label: "Avg local rank", value: "4.2", icon: MapPin },
+    {
+      label: "Reviews this week",
+      value: "23",
+      icon: Star,
+      chipClass: "bg-muted text-chart-2",
+    },
+    {
+      label: "Avg local rank",
+      value: "4.2",
+      icon: MapPin,
+      chipClass: "bg-chart-4/10 text-chart-4",
+    },
   ];
 
   const columns = [selected.targets.slice(0, 2), selected.targets.slice(2, 4)];
@@ -77,13 +93,12 @@ export default function LocationsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Locations</h1>
+          <h1 className="text-xl font-semibold text-foreground">Locations</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Manage venues and per-location menu-sync targets
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <DemoBadge />
           <div className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-sm font-medium text-foreground">
             <Building2 className="h-4 w-4" />
             <span>Bondi Dental</span>
@@ -92,27 +107,35 @@ export default function LocationsPage() {
             </span>
             <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
-          <button className="inline-flex items-center gap-1 rounded bg-accent px-4 py-2 text-sm font-medium text-accent-foreground hover:bg-accent/90">
+          <button
+            onClick={() => toast.info("Add location coming soon")}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-foreground hover:bg-accent/90 transition-colors"
+          >
             <Plus className="h-4 w-4" /> Add location
           </button>
         </div>
       </div>
 
+      {/* Stat cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {statCards.map((stat) => {
           const Icon = stat.icon;
           return (
             <div
               key={stat.label}
-              className="rounded-lg border border-border bg-background p-4"
+              className="rounded-xl ring-1 ring-foreground/10 bg-background p-4"
             >
               <div className="flex items-center gap-3">
-                <Icon className="h-5 w-5 text-foreground" />
+                <span
+                  className={`flex h-9 w-9 flex-none items-center justify-center rounded-lg ${stat.chipClass}`}
+                >
+                  <Icon className="h-4 w-4" />
+                </span>
                 <div>
-                  <p className="text-2xl font-bold text-foreground">
+                  <p className="text-2xl font-semibold tabular-nums text-foreground">
                     {stat.value}
                   </p>
-                  <p className="text-xs font-medium text-muted-foreground">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                     {stat.label}
                   </p>
                 </div>
@@ -122,10 +145,11 @@ export default function LocationsPage() {
         })}
       </div>
 
-      <div className="overflow-x-auto rounded-lg border border-border bg-background">
+      {/* Locations table */}
+      <div className="overflow-x-auto rounded-xl ring-1 ring-foreground/10 bg-background">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-border bg-muted text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            <tr className="border-b border-border bg-muted text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <th className="px-4 py-3">Location</th>
               <th className="px-4 py-3">Menu-sync target</th>
               <th className="px-4 py-3">Status</th>
@@ -174,7 +198,8 @@ export default function LocationsPage() {
         </table>
       </div>
 
-      <div className="rounded-lg border border-border bg-background p-6">
+      {/* Menu-sync targets for selected location */}
+      <div className="rounded-xl ring-1 ring-foreground/10 bg-background p-6">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-foreground">
             Menu-sync targets — {venueName(selected)}
@@ -189,7 +214,7 @@ export default function LocationsPage() {
           {columns.map((col, colIdx) => (
             <div
               key={colIdx}
-              className="rounded-lg border border-border"
+              className="rounded-lg ring-1 ring-foreground/10"
             >
               {col.map((target, idx) => {
                 const Icon = targetIcons[target.key] ?? Store;
@@ -227,7 +252,10 @@ export default function LocationsPage() {
           ))}
         </div>
         <div className="mt-4">
-          <button className="inline-flex items-center gap-1 rounded bg-accent px-4 py-2 text-sm font-medium text-accent-foreground hover:bg-accent/90">
+          <button
+            onClick={() => toast.info("Sync targets saved (demo mode)")}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-accent-foreground hover:bg-accent/90 transition-colors"
+          >
             <Check className="h-4 w-4" /> Save sync targets
           </button>
         </div>
